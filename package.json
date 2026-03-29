@@ -1,0 +1,22 @@
+{
+  "name": "santra-cli",
+  "version": "1.0.0",
+  "type": "module",
+  "license": "Apache-2.0",
+  "private": true,
+  "workspaces": [
+    "cli",
+    "packages/*",
+    "common"
+  ],
+  "devDependencies": {
+    "@types/bun": "latest"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  },
+  "engines": {
+    "bun": "1.3.11"
+  },
+  "packageManager": "bun@1.3.11"
+}
