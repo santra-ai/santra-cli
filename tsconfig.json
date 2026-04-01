@@ -24,6 +24,15 @@
     // Some stricter flags (disabled by default)
     "noUnusedLocals": false,
     "noUnusedParameters": false,
-    "noPropertyAccessFromIndexSignature": false
-  }
+    "noPropertyAccessFromIndexSignature": false,
+    "baseUrl": ".",
+    "paths": {
+      "@santra/shared": ["packages/shared/src/index.ts"],
+      "@santra/shared/*": ["packages/shared/src/*"]
+    }
+  },
+  "include": [
+    "apps/**/*.ts",
+    "packages/**/*.ts"
+  ]
 }

@@ -1,5 +1,5 @@
 {
-  "name": "@santra/cli",
+  "name": "@santra/web",
   "private": true,
   "type": "module",
   "module": "src/index.ts",
