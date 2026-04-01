@@ -1,6 +1,7 @@
 {
-  "name": "santra-cli",
+  "name": "santra-project",
   "version": "1.0.0",
+  "description": "Santra monorepo for CLI, web, backend, and shared packages.",
   "devDependencies": {
     "@types/bun": "latest"
   },
@@ -14,9 +15,13 @@
   "packageManager": "bun@1.3.11",
   "private": true,
   "type": "module",
+  "scripts": {
+    "typecheck": "bunx tsc --noEmit --project tsconfig.json"
+  },
   "workspaces": [
+    "web",
+    "backend",
     "cli",
-    "packages/*",
-    "common"
+    "packages/*"
   ]
 }

@@ -1,15 +1,7 @@
-# cli
+# @santra/cli
 
-To install dependencies:
-
-```bash
-bun install
-```
-
-To run:
+Santra CLI application workspace package.
 
 ```bash
-bun run index.ts
+bun run --filter @santra/cli dev
 ```
-
-This project was created using `bun init` in bun v1.3.11. [Bun](https://bun.com) is a fast all-in-one JavaScript runtime.

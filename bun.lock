@@ -11,8 +11,32 @@
         "typescript": "^5",
       },
     },
+    "backend": {
+      "name": "@santra/backend",
+      "dependencies": {
+        "@santra/shared": "workspace:*",
+      },
+      "devDependencies": {
+        "@types/bun": "latest",
+      },
+      "peerDependencies": {
+        "typescript": "^5",
+      },
+    },
     "cli": {
       "name": "@santra/cli",
+      "dependencies": {
+        "@santra/shared": "workspace:*",
+      },
+      "devDependencies": {
+        "@types/bun": "latest",
+      },
+      "peerDependencies": {
+        "typescript": "^5",
+      },
+    },
+    "packages/shared": {
+      "name": "@santra/shared",
       "dependencies": {
         "zod": "^4.3.6",
       },
@@ -23,8 +47,11 @@
         "typescript": "^5",
       },
     },
-    "common": {
-      "name": "@santra/common",
+    "web": {
+      "name": "@santra/web",
+      "dependencies": {
+        "@santra/shared": "workspace:*",
+      },
       "devDependencies": {
         "@types/bun": "latest",
       },
@@ -34,9 +61,13 @@
     },
   },
   "packages": {
+    "@santra/backend": ["@santra/backend@workspace:backend"],
+
     "@santra/cli": ["@santra/cli@workspace:cli"],
 
-    "@santra/common": ["@santra/common@workspace:common"],
+    "@santra/shared": ["@santra/shared@workspace:packages/shared"],
+
+    "@santra/web": ["@santra/web@workspace:web"],
 
     "@types/bun": ["@types/bun@1.3.11", "", { "dependencies": { "bun-types": "1.3.11" } }, "sha512-5vPne5QvtpjGpsGYXiFyycfpDF2ECyPcTSsFBMa0fraoxiQyMJ3SmuQIGhzPg2WJuWxVBoxWJ2kClYTcw/4fAg=="],
 
