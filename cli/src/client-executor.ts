@@ -1,5 +1,4 @@
-import type { RunState } from "./types";
-import type { ExecuteParams } from "./types";
+import type { ExecuteParams, RunState } from "@santra/shared";
 
 export async function clientExecuter(params: ExecuteParams): Promise<RunState> {
   return {
