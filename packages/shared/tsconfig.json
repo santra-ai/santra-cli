@@ -3,7 +3,5 @@
   "compilerOptions": {
     "baseUrl": "../../"
   },
-  "include": [
-    "src/**/*.ts"
-  ]
+  "include": ["schemas/**/*.ts", "types/**/*.ts"]
 }
