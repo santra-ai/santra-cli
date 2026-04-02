@@ -6,7 +6,6 @@ export type SendMessageInput = {
 }
 
 export type SendMessageDeps = {
-  agent: string
   execute: (params: ExecuteParams) => Promise<RunState>
 }
 
@@ -21,7 +20,6 @@ export async function sendMessage(
   }
 
   return deps.execute({
-    agent: deps.agent,
     prompt,
     previousRun: input.previousRunState ?? undefined,
   })

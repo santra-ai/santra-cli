@@ -6,7 +6,6 @@ export type RunState = {
 };
 
 export type ExecuteParams = {
-  agent: string
   prompt: string
   previousRun?: RunState
 }
