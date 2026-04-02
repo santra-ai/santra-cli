@@ -1,5 +1,4 @@
-import type { RunState } from "./types";
-import type { ExecuteParams } from "./types";
+import type { ExecuteParams, RunState } from "@santra/shared";
 
 export async function clientExecuter(params: ExecuteParams): Promise<RunState> {
   return {
@@ -8,6 +7,7 @@ export async function clientExecuter(params: ExecuteParams): Promise<RunState> {
       value: {
         prototype: true,
         stage: "send-message",
+        agent: params.agent,
         prompt: params.prompt,
         hasPreviousRun: Boolean(params.previousRun),
       },
