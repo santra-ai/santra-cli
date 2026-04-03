@@ -20,7 +20,6 @@
   },
   "workspaces": [
     "web",
-    "backend",
     "cli",
     "packages/*"
   ]

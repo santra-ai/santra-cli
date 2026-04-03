@@ -4,7 +4,7 @@ import type {
   CompletionChunk,
   StreamEvent,
   RunState,
-} from "packages/shared";
+} from "@santra/shared";
 
 // Agent Specific Types
 export type AgentRunOptions = {
@@ -13,6 +13,5 @@ export type AgentRunOptions = {
   onDelta?: (chunk: string) => void;
 };
 
-
-// todo 
+// todo
 // build sse parser

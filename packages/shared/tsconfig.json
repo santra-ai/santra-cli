@@ -3,5 +3,5 @@
   "compilerOptions": {
     "baseUrl": "../../"
   },
-  "include": ["schemas/**/*.ts", "types/**/*.ts"]
+  "include": ["index.ts", "schemas/**/*.ts", "types/**/*.ts"]
 }

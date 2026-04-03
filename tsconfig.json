@@ -27,12 +27,16 @@
     "noPropertyAccessFromIndexSignature": false,
     "baseUrl": ".",
     "paths": {
-      "@santra/shared": ["packages/shared/src/index.ts"],
-      "@santra/shared/*": ["packages/shared/src/*"]
+      "@santra/shared": ["packages/shared/index.ts"],
+      "@santra/shared/*": ["packages/shared/*"]
     }
   },
   "include": [
-    "apps/**/*.ts",
-    "packages/**/*.ts"
-  ]
+    "index.ts",
+    "cli/**/*.ts",
+    "core/**/*.ts",
+    "packages/**/*.ts",
+    "web/**/*.ts"
+  ],
+  "exclude": ["node_modules"]
 }
