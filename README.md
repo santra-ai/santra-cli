@@ -1,15 +1,21 @@
-# santra
+# santra-project
 
-To install dependencies:
+Monorepo/workspace layout for Santra applications and shared packages.
+
+## Structure
+
+```text
+apps/
+  cli/       CLI application
+  web/       Web application placeholder
+  backend/   Backend and agent runtime placeholder
+packages/
+  shared/    Shared types and schemas
+```
+
+## Commands
 
 ```bash
 bun install
+bun run typecheck
 ```
-
-To run:
-
-```bash
-bun run index.ts
-```
-
-This project was created using `bun init` in bun v1.3.11. [Bun](https://bun.com) is a fast all-in-one JavaScript runtime.

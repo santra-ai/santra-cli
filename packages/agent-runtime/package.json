@@ -1,14 +1,13 @@
 {
-  "name": "@santra/core",
-  "module": "index.ts",
-  "type": "module",
+  "name": "@santra/agent-runtime",
   "private": true,
+  "type": "module",
+  "module": "index.ts",
   "exports": {
     ".": "./index.ts"
   },
   "dependencies": {
-    "@santra/shared": "workspace:*",
-    "@santra/agent-runtime": "workspace:*"
+    "@santra/shared": "workspace:*"
   },
   "devDependencies": {
     "@types/bun": "latest"
