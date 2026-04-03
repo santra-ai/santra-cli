@@ -12,7 +12,7 @@ export type ClientConfig = {
 };
 
 // client
-// connects to runner with live token streaming to stdout
+// connects to runner and returns the resolved RunState
 // and returns the resolved Runstate
 
 export class Client {
@@ -23,21 +23,14 @@ export class Client {
       agentEndpoint:
         config.agentEndpoint ??
         process.env["AGENT_ENDPOINT"] ??
-        "http://localhost:3000/api/v1/comppletions",
+        "http://localhost:3000/api/v1/chat/completion/",
     });
   }
 
   async run(options: ClientRunOptions): Promise<RunState> {
-    const state = await this.runner.run({
+    return this.runner.run({
       prompt: options.prompt,
       previousMessages: options.previousState?.messages,
-      onDelta: (chunk) => {
-        process.stdout.write(chunk);
-      },
     });
-
-    process.stdout.write("\n\n");
-
-    return state;
   }
 }
