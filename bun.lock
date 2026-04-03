@@ -11,10 +11,11 @@
         "typescript": "^5",
       },
     },
-    "backend": {
-      "name": "@santra/backend",
+    "cli": {
+      "name": "@santra/cli",
       "dependencies": {
         "@santra/shared": "workspace:*",
+        "zod": "^4.3.6",
       },
       "devDependencies": {
         "@types/bun": "latest",
@@ -23,12 +24,8 @@
         "typescript": "^5",
       },
     },
-    "cli": {
-      "name": "@santra/cli",
-      "dependencies": {
-        "@santra/shared": "workspace:*",
-        "zod": "^4.3.6",
-      },
+    "packages/agent-runtime": {
+      "name": "agent-runtime",
       "devDependencies": {
         "@types/bun": "latest",
       },
@@ -62,8 +59,6 @@
     },
   },
   "packages": {
-    "@santra/backend": ["@santra/backend@workspace:backend"],
-
     "@santra/cli": ["@santra/cli@workspace:cli"],
 
     "@santra/shared": ["@santra/shared@workspace:packages/shared"],
@@ -73,6 +68,8 @@
     "@types/bun": ["@types/bun@1.3.11", "", { "dependencies": { "bun-types": "1.3.11" } }, "sha512-5vPne5QvtpjGpsGYXiFyycfpDF2ECyPcTSsFBMa0fraoxiQyMJ3SmuQIGhzPg2WJuWxVBoxWJ2kClYTcw/4fAg=="],
 
     "@types/node": ["@types/node@25.5.0", "", { "dependencies": { "undici-types": "~7.18.0" } }, "sha512-jp2P3tQMSxWugkCUKLRPVUpGaL5MVFwF8RDuSRztfwgN1wmqJeMSbKlnEtQqU8UrhTmzEmZdu2I6v2dpp7XIxw=="],
+
+    "agent-runtime": ["agent-runtime@workspace:packages/agent-runtime"],
 
     "bun-types": ["bun-types@1.3.11", "", { "dependencies": { "@types/node": "*" } }, "sha512-1KGPpoxQWl9f6wcZh57LvrPIInQMn2TQ7jsgxqpRzg+l0QPOFvJVH7HmvHo/AiPgwXy+/Thf6Ov3EdVn1vOabg=="],
 

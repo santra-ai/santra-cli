@@ -8,6 +8,7 @@
     "typecheck": "bunx tsc --noEmit --project tsconfig.json"
   },
   "dependencies": {
+    "@santra/core": "workspace:*",
     "@santra/shared": "workspace:*",
     "zod": "^4.3.6"
   },
