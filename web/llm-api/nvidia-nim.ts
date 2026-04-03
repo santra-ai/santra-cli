@@ -1,10 +1,6 @@
 import { Agent, fetch } from "undici";
 
-import type {
-  ChatCompletionChunk,
-  ChatCompletionsRequest,
-  ChatCompletionsResponse,
-} from "./types";
+import type { ChatCompletionChunk, ChatCompletionsRequest, ChatCompletionsResponse } from "./types";
 
 const NVIDIA_DEFAULT_BASE_URL = "https://integrate.api.nvidia.com/v1";
 const DEFAULT_MODEL = "openai/gpt-oss-120b";
@@ -71,9 +67,7 @@ export async function requestNvidiaChatCompletion(
 export async function handleNvidiaNonStream(
   body: Partial<ChatCompletionsRequest> & Pick<ChatCompletionsRequest, "messages">,
 ): Promise<ChatCompletionsResponse> {
-  const response = await createNvidiaRequest(
-    createChatCompletionsRequest({ ...body, stream: false }),
-  );
+  const response = await createNvidiaRequest(createChatCompletionsRequest({ ...body, stream: false }));
 
   if (!response.ok) {
     throw new Error(`NVIDIA NIM request failed (${response.status}): ${await response.text()}`);
