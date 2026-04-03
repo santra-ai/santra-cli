@@ -2,11 +2,14 @@
   "name": "@santra/shared",
   "private": true,
   "type": "module",
-  "module": "src/index.ts",
+  "module": "index.ts",
+  "exports": {
+    ".": "./index.ts"
+  },
   "scripts": {
     "typecheck": "bunx tsc --noEmit --project tsconfig.json"
   },
-  "dependencies": {
+  "dependencies": { 
     "zod": "^4.3.6"
   },
   "devDependencies": {

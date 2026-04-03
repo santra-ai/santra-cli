@@ -1,11 +1,10 @@
 {
-  "name": "@santra/backend",
+  "name": "@santra/agent-runtime",
   "private": true,
   "type": "module",
-  "module": "src/index.ts",
-  "scripts": {
-    "dev": "bun run src/index.ts",
-    "typecheck": "bunx tsc --noEmit --project tsconfig.json"
+  "module": "index.ts",
+  "exports": {
+    ".": "./index.ts"
   },
   "dependencies": {
     "@santra/shared": "workspace:*"
