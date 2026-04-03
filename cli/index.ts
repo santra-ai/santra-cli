@@ -31,3 +31,5 @@ if (state.output.type === "error") {
   console.error(`[cli] Error: ${state.output.message}`);
   process.exit(1);
 }
+
+console.log(state.output.content);

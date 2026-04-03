@@ -1,8 +1,6 @@
 import type {
   Message,
   CompletionRequest,
-  CompletionChunk,
-  StreamEvent,
   RunState,
 } from "@santra/shared";
 
@@ -13,71 +11,58 @@ export type AgentRunOptions = {
   onDelta?: (chunk: string) => void;
 };
 
-// SSE  parser
-
 const DONE_SENTINEL = "[DONE]";
 
-function parseSSELine(raw: string): CompletionChunk | null {
-  // removing extra spaces
-  const line = raw.trim();
-
-  // if there is not data available
+function parseSSEDataLine(rawLine: string): string | null {
+  const line = rawLine.replace(/\r$/, "");
   if (!line.startsWith("data:")) return null;
 
-  const payload = line.slice("data:".length).trim();
-  if (payload === DONE_SENTINEL) return null;
+  const data = line.slice("data:".length).replace(/^ /, "");
+  if (!data || data === DONE_SENTINEL) return null;
 
-  try {
-    return JSON.parse(payload) as CompletionChunk;
-  } catch {
-    return null;
-  }
+  return data;
 }
 
-async function* readSSEStream(
+async function readTextStream(
   reader: ReadableStreamDefaultReader<Uint8Array>,
-): AsyncGenerator<StreamEvent> {
+  onDelta?: (chunk: string) => void,
+): Promise<string> {
   const decoder = new TextDecoder();
-
   let buffer = "";
   let fullContent = "";
 
   while (true) {
     const { done, value } = await reader.read();
 
-    if (done) {
-      yield { type: "done", fullContent };
-      return;
-    }
+    if (done) break;
 
     buffer += decoder.decode(value, { stream: true });
-
     const lines = buffer.split("\n");
     buffer = lines.pop() ?? "";
 
     for (const line of lines) {
-      if (!line.trim()) continue;
+      const data = parseSSEDataLine(line);
+      if (!data) continue;
 
-      const chunk = parseSSELine(line);
-      if (!chunk) continue;
-
-      const delta = chunk.choices[0]?.delta?.content;
-      if (delta) {
-        fullContent += delta;
-        yield { type: "delta", content: delta };
-      }
-
-      if (chunk.choices[0]?.finish_reason === "stop") {
-        yield { type: "done", fullContent };
-        return;
-      }
+      fullContent += data;
+      onDelta?.(data);
     }
   }
+
+  if (buffer) {
+    const data = parseSSEDataLine(buffer);
+    if (data) {
+      fullContent += data;
+      onDelta?.(data);
+    }
+  }
+
+  return fullContent;
 }
 
 // This is my Base Agent
 // Sends the conversation to the backend's /api/v1/completions
-// consule the SSE stream, and returns a resolved RunState.
+// resolves the processed SSE response into a RunState.
 // Has no knowledge of which LLM provider is used as of now that's backend concern will add in future.
 
 export class BaseAgent {
@@ -126,35 +111,10 @@ export class BaseAgent {
       };
     }
 
-    // if Everythig goes fine
-
     const reader = response.body.getReader() as ReadableStreamDefaultReader<
       Uint8Array<ArrayBufferLike>
     >;
-    let finalContent = "";
-
-    for await (const event of readSSEStream(reader)) {
-      switch (event.type) {
-        case "delta":
-          finalContent += event.content;
-          onDelta?.(event.content);
-          break;
-
-        case "done":
-          finalContent = event.fullContent;
-          break;
-
-        case "error":
-          return {
-            messages,
-            output: {
-              type: "error",
-              message: event.message,
-              statusCode: event.statusCode,
-            },
-          };
-      }
-    }
+    const finalContent = await readTextStream(reader, onDelta);
 
     const assistantMessage: Message = {
       role: "assistant",
