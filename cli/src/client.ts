@@ -31,6 +31,9 @@ export class Client {
     return this.runner.run({
       prompt: options.prompt,
       previousMessages: options.previousState?.messages,
+      onDelta: (chunk) => {
+        process.stdout.write(chunk);
+      },
     });
   }
 }
