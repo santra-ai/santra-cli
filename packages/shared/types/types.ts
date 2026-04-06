@@ -6,12 +6,18 @@ export type Message = {
   content: string;
 };
 
-// Streaming types
-export type StreamEvent =
+// Web Streaming Protocol.
+// these are the events santra's backend streams back to agent-runtime over SSE
+
+export type WebStreamEvent =
+  | { type: "start" }
   | { type: "delta"; content: string }
-  | { type: "done"; fullContent: string }
+  | { type: "reasoning"; content: string }
+  | { type: "text"; text: string }
+  | { type: "finish" }
   | { type: "error"; message: string; statusCode?: number };
 
+// agent output
 export type AgentOutput =
   | { type: "text"; content: string }
   | { type: "error"; message: string; statusCode?: number };
@@ -26,14 +32,4 @@ export type RunState = {
 export type CompletionRequest = {
   prompt: string;
   messages?: Message[];
-};
-
-export type CompletionChunk = {
-  id: string;
-  object: "chat.completion.chunk";
-  choices: Array<{
-    index: number;
-    delta: { content?: string; role?: Role };
-    finish_reason: string | null;
-  }>;
 };

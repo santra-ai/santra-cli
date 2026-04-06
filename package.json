@@ -10,7 +10,7 @@
   },
   "license": "Apache-2.0",
   "scripts": {
-    "backend": "bun --watch backend/src/index.ts",
+    "web": "bun --cwd web run dev",
     "cli": "bun cli/index.ts",
     "typecheck": "bunx tsc --noEmit --project tsconfig.json"
   },
