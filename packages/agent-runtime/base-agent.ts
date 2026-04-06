@@ -1,4 +1,4 @@
-import type { ChatCompletionRequestBody, CompletionRequest, RunState } from "@santra/shared";
+import type { ChatCompletionRequestBody, CompletionRequest, Message, RunState } from "@santra/shared";
 
 // Agent Specific Types
 export type AgentRunOptions = {
@@ -77,10 +77,10 @@ export class BaseAgent {
       };
     }
 
-    const reader = response.body.getReader() as ReadableStreamDefaultReader<Uint8Array<ArrayBufferLike>>;
+    const reader = response.body.getReader();
     const finalContent = await readTextStream(reader, onDelta);
 
-    const assistantMessage: ChatCompletionRequestBody["messages"][0] = {
+    const assistantMessage: Message = {
       role: "assistant",
       content: finalContent,
     };

@@ -4,14 +4,14 @@ import type { AvailableModelId, ChatCompletionChunk, ChatCompletionRequestBody }
 // CONFIG
 // ─────────────────────────────────────────────
 const NVIDIA_DEFAULT_BASE_URL = "https://integrate.api.nvidia.com/v1";
-const DEFAULT_MODEL: AvailableModelId = "meta/llama-3.3-70b-instruct";
+const DEFAULT_MODEL: AvailableModelId = "meta/llama-3.1-8b-instruct";
 
 interface NvidiaNIMConfig {
   apiKey: string;
   baseURL?: string;
 }
 
-class NvidiaNIM {
+export class NvidiaNIM {
   private apiKey: string;
   private baseURL: string;
 
@@ -52,7 +52,7 @@ class NvidiaNIM {
     const stream = new ReadableStream({
       async start(controller) {
         const decoder = new TextDecoder("utf-8");
-        const encoder = new TextEncoder("utf-8");
+        const encoder = new TextEncoder();
         let buffer = "";
 
         while (true) {
@@ -103,36 +103,3 @@ export async function handleNvidiaStream(
 
   return response;
 }
-
-// ─────────────────────────────────────────────
-// TESTING
-// ─────────────────────────────────────────────
-// function test() {
-//   const client = new NvidiaNIM({
-//     apiKey: process.env.NVIDIA_NIM_KEY!,
-//   });
-
-//   client.chat
-//     .message({
-//       model: "meta/llama-3.1-8b-instruct",
-//       messages: [{ role: "user", content: "Hello! Who are you?" }],
-//       stream: true,
-//     })
-//     .then((stream) => {
-//       const reader = stream.getReader();
-//       const decoder = new TextDecoder("utf-8");
-
-//       (async function read() {
-//         while (true) {
-//           const { done, value } = await reader.read();
-//           if (done) break;
-
-//           const chunk = decoder.decode(value);
-//           console.log("Received chunk:", chunk);
-//         }
-//       })().catch(console.error);
-//     })
-//     .catch(console.error);
-// }
-
-// test();
