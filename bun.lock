@@ -85,6 +85,50 @@
         "typescript": "^6",
       },
     },
+    "packages/agent-runtime": {
+      "name": "@santra/agent-runtime",
+      "dependencies": {
+        "@santra/shared": "workspace:*",
+      },
+      "devDependencies": {
+        "@types/bun": "latest",
+      },
+      "peerDependencies": {
+        "typescript": "^5",
+      },
+    },
+    "packages/shared": {
+      "name": "@santra/shared",
+      "dependencies": {
+        "zod": "^4.3.6",
+      },
+      "devDependencies": {
+        "@types/bun": "latest",
+      },
+      "peerDependencies": {
+        "typescript": "^5",
+      },
+    },
+    "web": {
+      "name": "web",
+      "version": "0.1.0",
+      "dependencies": {
+        "@santra/shared": "workspace:*",
+        "next": "16.2.2",
+        "react": "19.2.4",
+        "react-dom": "19.2.4",
+      },
+      "devDependencies": {
+        "@tailwindcss/postcss": "^4",
+        "@types/node": "^20",
+        "@types/react": "^19",
+        "@types/react-dom": "^19",
+        "eslint": "^9",
+        "eslint-config-next": "16.2.2",
+        "tailwindcss": "^4",
+        "typescript": "^5",
+      },
+    },
   },
   "trustedDependencies": [
     "sharp",

@@ -8,5 +8,4 @@ export type {
 } from "./types/types.ts";
 
 export type { AvailableModelId } from "./types/model-ids.ts";
-
-export { MessageSchema, CompletionRequestSchema, AgentOutputSchema } from "./schemas/schemas.ts";
+export { MessageSchema, CompletionRequestSchema } from "./schemas/schemas.ts";

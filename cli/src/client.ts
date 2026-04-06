@@ -35,5 +35,9 @@ export class Client {
         process.stdout.write(chunk);
       },
     });
+
+    process.stdout.write("\n\n");
+
+    return state;
   }
 }
