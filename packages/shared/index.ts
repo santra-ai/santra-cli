@@ -1,5 +1,6 @@
 export type {
   Message,
+  ChatCompletionChunk,
   ChatCompletionRequestBody,
   ChatCompletionResponseBody,
   RunState,
@@ -9,4 +10,3 @@ export type {
 export type { AvailableModelId } from "./types/model-ids.ts";
 
 export { MessageSchema, CompletionRequestSchema, AgentOutputSchema } from "./schemas/schemas.ts";
-export { dumpLog } from "./dump-log.ts";

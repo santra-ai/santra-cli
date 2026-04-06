@@ -7,50 +7,20 @@ export type AgentRunOptions = {
   onDelta?: (chunk: string) => void;
 };
 
-const DONE_SENTINEL = "[DONE]";
-
-function parseSSEDataLine(rawLine: string): string | null {
-  const line = rawLine.replace(/\r$/, "");
-  if (!line.startsWith("data:")) return null;
-
-  const data = line.slice("data:".length).replace(/^ /, "");
-  if (!data || data === DONE_SENTINEL) return null;
-
-  return data;
-}
-
 async function readTextStream(
   reader: ReadableStreamDefaultReader<Uint8Array>,
   onDelta?: (chunk: string) => void,
 ): Promise<string> {
   const decoder = new TextDecoder();
-  let buffer = "";
   let fullContent = "";
 
   while (true) {
     const { done, value } = await reader.read();
-
     if (done) break;
 
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split("\n");
-    buffer = lines.pop() ?? "";
-
-    for (const line of lines) {
-      const data = parseSSEDataLine(line);
-      if (!data) continue;
-
-      fullContent += data;
-      onDelta?.(data);
-    }
-  }
-
-  if (buffer) {
-    const data = parseSSEDataLine(buffer);
-    if (data) {
-      fullContent += data;
-      onDelta?.(data);
-    }
+    const chunk = decoder.decode(value, { stream: true });
+    fullContent += chunk;
+    onDelta?.(chunk);
   }
 
   return fullContent;
@@ -80,7 +50,7 @@ export class BaseAgent {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Accept: "text/event-stream",
+          Accept: "text/plain",
         },
         body: JSON.stringify(body),
       });
