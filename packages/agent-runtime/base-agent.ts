@@ -1,82 +1,84 @@
 import type {
   Message,
   CompletionRequest,
+  WebStreamEvent,
   RunState,
 } from "@santra/shared";
 
 // Agent Specific Types
 export type AgentRunOptions = {
   prompt: string;
-  previousMessage?: Message[];
+  previousMessages?: Message[];
   onDelta?: (chunk: string) => void;
 };
 
-const DONE_SENTINEL = "[DONE]";
+// web sse parser
+// parses the protocol that /web/api/v1/completions sends back
 
-function parseSSEDataLine(rawLine: string): string | null {
-  const line = rawLine.replace(/\r$/, "");
+function parseWebSSELine(raw: string): WebStreamEvent | null {
+  const line = raw.trim();
   if (!line.startsWith("data:")) return null;
 
-  const data = line.slice("data:".length).replace(/^ /, "");
-  if (!data || data === DONE_SENTINEL) return null;
+  const payload = line.slice("data:".length).trim();
+  if (!payload) return null;
 
-  return data;
+  try {
+    return JSON.parse(payload) as WebStreamEvent;
+  } catch (error) {
+    return null;
+  }
 }
 
-async function readTextStream(
-  reader: ReadableStreamDefaultReader<Uint8Array>,
-  onDelta?: (chunk: string) => void,
-): Promise<string> {
+async function* readWebStream(reader: {
+  read(): Promise<{ done: boolean; value?: Uint8Array }>;
+}): AsyncGenerator<WebStreamEvent> {
   const decoder = new TextDecoder();
   let buffer = "";
-  let fullContent = "";
 
   while (true) {
     const { done, value } = await reader.read();
 
-    if (done) break;
+    if (done) return;
 
     buffer += decoder.decode(value, { stream: true });
+
     const lines = buffer.split("\n");
     buffer = lines.pop() ?? "";
 
     for (const line of lines) {
-      const data = parseSSEDataLine(line);
-      if (!data) continue;
+      if (!line.trim()) continue;
 
-      fullContent += data;
-      onDelta?.(data);
+      const event = parseWebSSELine(line);
+      if (!event) continue;
+
+      yield event;
+
+      // Stop consuming after finish or error — no more events expected
+      if (event.type === "finish" || event.type === "error") return;
     }
   }
-
-  if (buffer) {
-    const data = parseSSEDataLine(buffer);
-    if (data) {
-      fullContent += data;
-      onDelta?.(data);
-    }
-  }
-
-  return fullContent;
 }
 
-// This is my Base Agent
-// Sends the conversation to the backend's /api/v1/completions
-// resolves the processed SSE response into a RunState.
-// Has no knowledge of which LLM provider is used as of now that's backend concern will add in future.
+// this is my base agent.
+// makes a request to /web/api/v1/completetions.
+// santra handles nvidia nim and streams back in out webSteamEvent Protocol.
+// Base Agent consumes that stream and resolves to the Runstate.
+
+// has zero knowledgeo of which llm provider web uses -- to be added in future.
 
 export class BaseAgent {
   constructor(private readonly endpoint: string) {}
 
   async run(options: AgentRunOptions): Promise<RunState> {
-    const { prompt, previousMessage = [], onDelta } = options;
+    const { prompt, previousMessages = [], onDelta } = options;
 
     const userMessage: Message = { role: "user", content: prompt };
-    const messages: Message[] = [...previousMessage, userMessage];
+    const messages: Message[] = [...previousMessages, userMessage];
 
     const body: CompletionRequest = { prompt, messages };
 
-    // fetching the backend here
+    // simple fetch method calling
+
     let response: Response;
 
     try {
@@ -88,8 +90,8 @@ export class BaseAgent {
         },
         body: JSON.stringify(body),
       });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Network Error";
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Network error";
       return { messages, output: { type: "error", message } };
     }
 
@@ -98,7 +100,7 @@ export class BaseAgent {
         messages,
         output: {
           type: "error",
-          message: `Backend returned ${response.status} : ${response.statusText} `,
+          message: `Web returned ${response.status}: ${response.statusText}`,
           statusCode: response.status,
         },
       };
@@ -111,10 +113,46 @@ export class BaseAgent {
       };
     }
 
-    const reader = response.body.getReader() as ReadableStreamDefaultReader<
-      Uint8Array<ArrayBufferLike>
-    >;
-    const finalContent = await readTextStream(reader, onDelta);
+    // consume sse stream send my server
+
+    const reader = response.body.getReader();
+    let finalContent = "";
+
+    for await (const event of readWebStream(reader)) {
+      switch (event.type) {
+        case "start":
+          // stream started : no data to send.
+          break;
+
+        case "delta":
+          // first token arroved. print first token.
+          onDelta?.(event.content);
+          break;
+
+        case "reasoning":
+          // reasoning token ignoring for now.
+          break;
+
+        case "text":
+          // sending complete final thing for web
+          finalContent = event.text;
+          break;
+
+        case "finish":
+          // done now exit the loop
+          break;
+
+        case "error":
+          return {
+            messages,
+            output: {
+              type: "error",
+              message: event.message,
+              statusCode: event.statusCode,
+            },
+          };
+      }
+    }
 
     const assistantMessage: Message = {
       role: "assistant",

@@ -1,10 +1,13 @@
 {
   "name": "@santra/core",
-  "module": "index.ts",
-  "type": "module",
   "private": true,
+  "type": "module",
+  "module": "index.ts",
   "exports": {
     ".": "./index.ts"
+  },
+  "scripts": {
+    "typecheck": "bunx tsc --noEmit --project tsconfig.json"
   },
   "dependencies": {
     "@santra/shared": "workspace:*",

@@ -9,8 +9,10 @@
     "moduleResolution": "bundler",
     "allowImportingTsExtensions": true,
     "verbatimModuleSyntax": true,
+    "types": ["bun"],
     "noEmit": true,
     "strict": true,
+    "ignoreDeprecations": "6.0",
     "skipLibCheck": true,
     "noFallthroughCasesInSwitch": true,
     "noUncheckedIndexedAccess": true,
@@ -28,10 +30,5 @@
       "@santra/core/*": ["core/*"]
     }
   },
-  "include": [
-    "backend/**/*.ts",
-    "cli/**/*.ts",
-    "core/**/*.ts",
-    "packages/**/*.ts"
-  ]
+  "include": ["cli/**/*.ts", "core/**/*.ts", "packages/**/*.ts"]
 }
