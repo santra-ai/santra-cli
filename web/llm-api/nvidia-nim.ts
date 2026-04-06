@@ -1,113 +1,138 @@
-import { Agent, fetch } from "undici";
+import type { AvailableModelId, ChatCompletionChunk, ChatCompletionRequestBody } from "@santra/shared";
 
-import type { ChatCompletionChunk, ChatCompletionRequestBody } from "@santra/shared/types/types";
-import { type AvailableModelId } from "@santra/shared";
-
+// ─────────────────────────────────────────────
+// CONFIG
+// ─────────────────────────────────────────────
 const NVIDIA_DEFAULT_BASE_URL = "https://integrate.api.nvidia.com/v1";
-const DEFAULT_MODEL: AvailableModelId = "qwen/qwq-32b";
+const DEFAULT_MODEL: AvailableModelId = "meta/llama-3.3-70b-instruct";
 
-const nvidiaAgent = new Agent({
-  headersTimeout: 30_000,
-  bodyTimeout: 120_000,
-  connections: 1,
-  pipelining: 1,
-  keepAliveTimeout: 30_000,
-  keepAliveMaxTimeout: 60_000,
-});
+interface NvidiaNIMConfig {
+  apiKey: string;
+  baseURL?: string;
+}
 
-function createChatCompletionsRequestBody(
-  body: Partial<ChatCompletionRequestBody> & Pick<ChatCompletionRequestBody, "messages">,
-): ChatCompletionRequestBody {
-  return {
-    model: body.model ?? DEFAULT_MODEL,
-    messages: body.messages,
-    stream: body.stream ?? false,
+class NvidiaNIM {
+  private apiKey: string;
+  private baseURL: string;
+
+  chat: {
+    message: (options: ChatCompletionRequestBody) => Promise<ReadableStream<Uint8Array>>;
   };
-}
 
-async function createNvidiaRequest(body: ChatCompletionRequestBody) {
-  const apiKey = process.env.NVIDIA_NIM_KEY;
-  if (!apiKey) {
-    throw new Error("NVIDIA_NIM_KEY is not configured");
+  constructor(config: NvidiaNIMConfig) {
+    this.apiKey = config.apiKey;
+    this.baseURL = config.baseURL = NVIDIA_DEFAULT_BASE_URL;
+
+    this.chat = {
+      message: this.chatMessage.bind(this),
+    };
   }
 
-  return fetch(`${NVIDIA_DEFAULT_BASE_URL}/chat/completions`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(body),
-    dispatcher: nvidiaAgent,
-  });
-}
+  private async chatMessage(options: ChatCompletionRequestBody): Promise<ReadableStream> {
+    console.log(this.baseURL);
+    const response = await fetch(`${this.baseURL}/chat/completions`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${this.apiKey}`,
+      },
+      body: JSON.stringify({
+        model: options.model,
+        messages: options.messages,
+        stream: options.stream,
+      }),
+    });
 
-export async function handleNvidiaStream(
-  body: Partial<ChatCompletionRequestBody> & Pick<ChatCompletionRequestBody, "messages">,
-): Promise<ReadableStream<Uint8Array<ArrayBufferLike>>> {
-  const response = await createNvidiaRequest(
-    createChatCompletionsRequestBody({
-      ...body,
-      stream: true,
-    }),
-  );
+    if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
 
-  if (!response.ok) {
-    throw new Error(`NVIDIA NIM stream failed (${response.status}): ${await response.text()}`);
-  }
+    if (!response.body) throw new Error("No response body");
 
-  if (!response.body) {
-    throw new Error("Failed to get NVIDIA response body");
-  }
+    const reader = response.body.getReader();
 
-  const reader = response.body.getReader();
+    const stream = new ReadableStream({
+      async start(controller) {
+        const decoder = new TextDecoder("utf-8");
+        const encoder = new TextEncoder("utf-8");
+        let buffer = "";
 
-  return new ReadableStream({
-    async start(controller) {
-      const decoder = new TextDecoder();
-      const encoder = new TextEncoder();
-      let buffer = "";
-
-      try {
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
 
           buffer += decoder.decode(value, { stream: true });
-          const parts = buffer.split("\n");
-          buffer = parts.pop() ?? "";
+          const lines = buffer.split("\n");
+          buffer = lines.pop() ?? "";
 
-          for (const part of parts) {
-            const line = part.trim();
-            if (!line.startsWith("data:")) continue;
+          for (const line of lines) {
+            if (!line.startsWith("data: ")) continue;
 
-            const payload = line.replace(/^data:\s*/, "");
-            if (payload === "[DONE]") {
-              controller.enqueue(encoder.encode("data: [DONE]\n\n"));
-              controller.close();
-              return;
-            }
+            const data = line.slice("data: ".length).trim();
+            if (data === "[DONE]") break;
 
-            let chunk: ChatCompletionChunk;
             try {
-              chunk = JSON.parse(payload) as ChatCompletionChunk;
-            } catch {
-              continue;
-            }
-
-            const text = chunk.choices[0]?.delta?.content;
-            if (!text) continue;
-
-            controller.enqueue(encoder.encode(`data: ${text}\n\n`));
+              const json = JSON.parse(data) as ChatCompletionChunk;
+              const delta = json.choices?.[0]?.delta?.content;
+              if (delta) controller.enqueue(encoder.encode(delta));
+            } catch {}
           }
         }
+      },
+    });
 
-        controller.close();
-      } catch (error) {
-        controller.error(error);
-      } finally {
-        reader.releaseLock();
-      }
-    },
-  });
+    return stream;
+  }
 }
+
+// ─────────────────────────────────────────────
+// STREAMING HANDLER
+// FIX 1: Forward full JSON payload, not just delta.content
+// FIX 2: Don't skip chunks where content is "" (role/finish chunks)
+// ─────────────────────────────────────────────
+
+export async function handleNvidiaStream(
+  body: Partial<ChatCompletionRequestBody> & Pick<ChatCompletionRequestBody, "messages">,
+): Promise<ReadableStream<Uint8Array>> {
+  const client = new NvidiaNIM({
+    apiKey: process.env.NVIDIA_NIM_KEY!,
+  });
+  const response = client.chat.message({
+    model: body.model ?? DEFAULT_MODEL,
+    messages: body.messages,
+    stream: true,
+  });
+
+  return response;
+}
+
+// ─────────────────────────────────────────────
+// TESTING
+// ─────────────────────────────────────────────
+// function test() {
+//   const client = new NvidiaNIM({
+//     apiKey: process.env.NVIDIA_NIM_KEY!,
+//   });
+
+//   client.chat
+//     .message({
+//       model: "meta/llama-3.1-8b-instruct",
+//       messages: [{ role: "user", content: "Hello! Who are you?" }],
+//       stream: true,
+//     })
+//     .then((stream) => {
+//       const reader = stream.getReader();
+//       const decoder = new TextDecoder("utf-8");
+
+//       (async function read() {
+//         while (true) {
+//           const { done, value } = await reader.read();
+//           if (done) break;
+
+//           const chunk = decoder.decode(value);
+//           console.log("Received chunk:", chunk);
+//         }
+//       })().catch(console.error);
+//     })
+//     .catch(console.error);
+// }
+
+// test();
