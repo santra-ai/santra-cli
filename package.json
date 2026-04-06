@@ -22,9 +22,10 @@
     "packages/*"
   ],
   "devDependencies": {
-    "@types/bun": "latest"
+    "@types/bun": "latest",
+    "typescript": "^6"
   },
-  "peerDependencies": {
-    "typescript": "^5"
+  "dependencies": {
+    "@types/node": "^25.5.2"
   }
 }

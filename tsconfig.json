@@ -1,10 +1,11 @@
 {
   "compilerOptions": {
-    "lib": ["ESNext"],
+    "lib": ["ESNext", "DOM"],
     "target": "ESNext",
     "module": "Preserve",
     "moduleDetection": "force",
     "jsx": "react-jsx",
+    "types": ["node", "bun"],
     "allowJs": true,
     "moduleResolution": "bundler",
     "allowImportingTsExtensions": true,
@@ -18,21 +19,20 @@
     "noUnusedLocals": false,
     "noUnusedParameters": false,
     "noPropertyAccessFromIndexSignature": false,
-    "baseUrl": ".",
     "paths": {
-      "@santra/shared": ["packages/shared/index.ts"],
-      "@santra/shared/*": ["packages/shared/*"],
-      "@santra/agent-runtime": ["packages/agent-runtime/index.ts"],
-      "@santra/agent-runtime/*": ["packages/agent-runtime/*"],
-      "@santra/core": ["core/index.ts"],
-      "@santra/core/*": ["core/*"]
+      "@santra/shared": ["./packages/shared/index.ts"],
+      "@santra/shared/*": ["./packages/shared/*"],
+      "@santra/agent-runtime": ["./packages/agent-runtime/index.ts"],
+      "@santra/agent-runtime/*": ["./packages/agent-runtime/*"],
+      "@santra/core": ["./core/index.ts"],
+      "@santra/core/*": ["./core/*"]
     }
   },
   "include": [
     "backend/**/*.ts",
     "cli/**/*.ts",
     "core/**/*.ts",
-    "packages/**/*.ts"
-    ,"tmp/**/*.ts"
+    "packages/**/*.ts",
+    "tmp/**/*.ts"
   ]
 }
