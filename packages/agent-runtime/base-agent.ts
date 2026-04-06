@@ -1,13 +1,9 @@
-import type {
-  Message,
-  CompletionRequest,
-  RunState,
-} from "@santra/shared";
+import type { ChatCompletionRequestBody, CompletionRequest, RunState } from "@santra/shared";
 
 // Agent Specific Types
 export type AgentRunOptions = {
   prompt: string;
-  previousMessage?: Message[];
+  previousMessage?: ChatCompletionRequestBody["messages"];
   onDelta?: (chunk: string) => void;
 };
 
@@ -71,8 +67,8 @@ export class BaseAgent {
   async run(options: AgentRunOptions): Promise<RunState> {
     const { prompt, previousMessage = [], onDelta } = options;
 
-    const userMessage: Message = { role: "user", content: prompt };
-    const messages: Message[] = [...previousMessage, userMessage];
+    const userMessage: ChatCompletionRequestBody["messages"][0] = { role: "user", content: prompt };
+    const messages: ChatCompletionRequestBody["messages"] = [...previousMessage, userMessage];
 
     const body: CompletionRequest = { prompt, messages };
 
@@ -111,12 +107,10 @@ export class BaseAgent {
       };
     }
 
-    const reader = response.body.getReader() as ReadableStreamDefaultReader<
-      Uint8Array<ArrayBufferLike>
-    >;
+    const reader = response.body.getReader() as ReadableStreamDefaultReader<Uint8Array<ArrayBufferLike>>;
     const finalContent = await readTextStream(reader, onDelta);
 
-    const assistantMessage: Message = {
+    const assistantMessage: ChatCompletionRequestBody["messages"][0] = {
       role: "assistant",
       content: finalContent,
     };

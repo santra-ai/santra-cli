@@ -1,15 +1,12 @@
 export type {
-  Role,
   Message,
-  StreamEvent,
-  AgentOutput,
+  ChatCompletionRequestBody,
+  ChatCompletionResponseBody,
   RunState,
   CompletionRequest,
-  CompletionChunk,
 } from "./types/types.ts";
 
-export {
-  MessageSchema,
-  CompletionRequestSchema,
-  AgentOutputSchema,
-} from "./schemas/schemas.ts";
+export type { AvailableModelId } from "./types/model-ids.ts";
+
+export { MessageSchema, CompletionRequestSchema, AgentOutputSchema } from "./schemas/schemas.ts";
+export { dumpLog } from "./dump-log.ts";

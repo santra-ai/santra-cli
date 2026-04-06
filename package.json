@@ -12,6 +12,7 @@
   "scripts": {
     "backend": "bun --watch backend/src/index.ts",
     "cli": "bun cli/index.ts",
+    "study": "bun tmp/app.ts",
     "typecheck": "bunx tsc --noEmit --project tsconfig.json"
   },
   "workspaces": [

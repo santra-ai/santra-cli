@@ -33,5 +33,6 @@
     "cli/**/*.ts",
     "core/**/*.ts",
     "packages/**/*.ts"
+    ,"tmp/**/*.ts"
   ]
 }

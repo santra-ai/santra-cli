@@ -1,9 +1,10 @@
 import { Agent, fetch } from "undici";
 
-import type { ChatCompletionChunk, ChatCompletionsRequest, ChatCompletionsResponse } from "./types";
+import type { ChatCompletionChunk, ChatCompletionRequestBody } from "@santra/shared/types/types";
+import { type AvailableModelId } from "@santra/shared";
 
 const NVIDIA_DEFAULT_BASE_URL = "https://integrate.api.nvidia.com/v1";
-const DEFAULT_MODEL = "openai/gpt-oss-120b";
+const DEFAULT_MODEL: AvailableModelId = "qwen/qwq-32b";
 
 const nvidiaAgent = new Agent({
   headersTimeout: 30_000,
@@ -14,34 +15,17 @@ const nvidiaAgent = new Agent({
   keepAliveMaxTimeout: 60_000,
 });
 
-function createChatCompletionsRequest(
-  body: Partial<ChatCompletionsRequest> & Pick<ChatCompletionsRequest, "messages">,
-): ChatCompletionsRequest {
+function createChatCompletionsRequestBody(
+  body: Partial<ChatCompletionRequestBody> & Pick<ChatCompletionRequestBody, "messages">,
+): ChatCompletionRequestBody {
   return {
     model: body.model ?? DEFAULT_MODEL,
     messages: body.messages,
-    temperature: body.temperature,
-    top_p: body.top_p,
-    top_k: body.top_k,
-    min_p: body.min_p,
-    n: body.n,
-    seed: body.seed,
-    max_tokens: body.max_tokens ?? 800,
-    stop: body.stop,
-    response_format: body.response_format,
-    frequency_penalty: body.frequency_penalty,
-    presence_penalty: body.presence_penalty,
-    logit_bias: body.logit_bias,
-    stream: body.stream,
-    stream_options: body.stream_options,
-    tools: body.tools,
-    tool_choice: body.tool_choice,
-    parallel_tool_calls: body.parallel_tool_calls,
-    user: body.user,
+    stream: body.stream ?? false,
   };
 }
 
-async function createNvidiaRequest(body: ChatCompletionsRequest) {
+async function createNvidiaRequest(body: ChatCompletionRequestBody) {
   const apiKey = process.env.NVIDIA_NIM_KEY;
   if (!apiKey) {
     throw new Error("NVIDIA_NIM_KEY is not configured");
@@ -58,32 +42,13 @@ async function createNvidiaRequest(body: ChatCompletionsRequest) {
   });
 }
 
-export async function requestNvidiaChatCompletion(
-  body: Partial<ChatCompletionsRequest> & Pick<ChatCompletionsRequest, "messages">,
-): Promise<ChatCompletionsResponse> {
-  return handleNvidiaNonStream(body);
-}
-
-export async function handleNvidiaNonStream(
-  body: Partial<ChatCompletionsRequest> & Pick<ChatCompletionsRequest, "messages">,
-): Promise<ChatCompletionsResponse> {
-  const response = await createNvidiaRequest(createChatCompletionsRequest({ ...body, stream: false }));
-
-  if (!response.ok) {
-    throw new Error(`NVIDIA NIM request failed (${response.status}): ${await response.text()}`);
-  }
-
-  return (await response.json()) as ChatCompletionsResponse;
-}
-
 export async function handleNvidiaStream(
-  body: Partial<ChatCompletionsRequest> & Pick<ChatCompletionsRequest, "messages">,
+  body: Partial<ChatCompletionRequestBody> & Pick<ChatCompletionRequestBody, "messages">,
 ): Promise<ReadableStream<Uint8Array<ArrayBufferLike>>> {
   const response = await createNvidiaRequest(
-    createChatCompletionsRequest({
+    createChatCompletionsRequestBody({
       ...body,
       stream: true,
-      stream_options: { include_usage: true },
     }),
   );
 
