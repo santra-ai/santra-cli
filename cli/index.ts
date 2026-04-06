@@ -1,20 +1,21 @@
 import { Client } from "./src/client.ts";
 import type { RunState } from "@santra/shared";
 
-// Args
+// taking input and argv
 
 const prompt = process.argv.slice(2).join(" ").trim();
 
 if (!prompt) {
-  console.error("how to use:  \n bun cli/src/index.ts <give_prompt>");
+  console.error("Usage: bun cli/src/index.ts <your prompt here>");
   process.exit(1);
 }
 
-// now Running
+// run function calling
+
 const client = new Client();
 
 console.log(`\nYou: ${prompt}`);
-process.stdout.write("Agent; ");
+process.stdout.write("Agent: ");
 
 let state: RunState;
 
@@ -31,5 +32,3 @@ if (state.output.type === "error") {
   console.error(`[cli] Error: ${state.output.message}`);
   process.exit(1);
 }
-
-console.log(state.output.content);

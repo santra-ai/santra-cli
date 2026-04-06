@@ -1,15 +1,10 @@
 export type {
   Role,
   Message,
-  StreamEvent,
+  WebStreamEvent,
   AgentOutput,
   RunState,
   CompletionRequest,
-  CompletionChunk,
 } from "./types/types.ts";
 
-export {
-  MessageSchema,
-  CompletionRequestSchema,
-  AgentOutputSchema,
-} from "./schemas/schemas.ts";
+export { MessageSchema, CompletionRequestSchema } from "./schemas/schemas.ts";

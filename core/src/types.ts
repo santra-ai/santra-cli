@@ -1,7 +1,7 @@
 import type { Message, RunState } from "@santra/shared";
 
 export type RunnerOptions = {
-  agentEndpoint: string;
+  endpoint: string; // /web/api/v1/completions URL
 };
 
 export type RunOptions = {
