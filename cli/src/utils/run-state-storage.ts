@@ -55,7 +55,7 @@ export function saveRunState({
       runStateDirectoryPath,
       RUN_STATE_FILENAME,
     );
-    console.log(`Saving run state to ${runStateDirectoryPath}`);
+
     fs.writeFileSync(runStateFilePath, JSON.stringify(sessionState, null, 2));
   } catch (error) {
     if (error instanceof Error) console.error(error.message);

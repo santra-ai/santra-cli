@@ -60,7 +60,11 @@ while (true) {
     state = await client.run({
       prompt,
       previousState: state,
+      onDelta: (chunk: string) => {
+        process.stdout.write(chunk);
+      },
     });
+    process.stdout.write("\n\n");
     saveRunState({ chatId, state });
 
     if (state.output.type === "error")
