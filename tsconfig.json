@@ -12,7 +12,6 @@
     "types": ["bun"],
     "noEmit": true,
     "strict": true,
-    "ignoreDeprecations": "6.0",
     "skipLibCheck": true,
     "noFallthroughCasesInSwitch": true,
     "noUncheckedIndexedAccess": true,
@@ -20,14 +19,13 @@
     "noUnusedLocals": false,
     "noUnusedParameters": false,
     "noPropertyAccessFromIndexSignature": false,
-    "baseUrl": ".",
     "paths": {
-      "@santra/shared": ["packages/shared/index.ts"],
-      "@santra/shared/*": ["packages/shared/*"],
-      "@santra/agent-runtime": ["packages/agent-runtime/index.ts"],
-      "@santra/agent-runtime/*": ["packages/agent-runtime/*"],
-      "@santra/core": ["core/index.ts"],
-      "@santra/core/*": ["core/*"]
+      "@santra/shared": ["./packages/shared/index.ts"],
+      "@santra/shared/*": ["./packages/shared/*"],
+      "@santra/agent-runtime": ["./packages/agent-runtime/index.ts"],
+      "@santra/agent-runtime/*": ["./packages/agent-runtime/*"],
+      "@santra/core": ["./core/index.ts"],
+      "@santra/core/*": ["./core/*"]
     }
   },
   "include": ["cli/**/*.ts", "core/**/*.ts", "packages/**/*.ts"]

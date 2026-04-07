@@ -9,13 +9,13 @@
   "scripts": {
     "typecheck": "bunx tsc --noEmit --project tsconfig.json"
   },
-  "dependencies": { 
+  "dependencies": {
     "zod": "^4.3.6"
   },
   "devDependencies": {
     "@types/bun": "latest"
   },
   "peerDependencies": {
-    "typescript": "^5"
+    "typescript": "^6"
   }
 }

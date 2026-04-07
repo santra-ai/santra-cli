@@ -7,7 +7,7 @@
     ".": "./index.ts"
   },
   "scripts": {
-    "typecheck": "bunx tsc --noEmit --project tsconfig.json"
+    "typecheck": "bunx tsc --noEmit --project ../../tsconfig.json --project ../web/tsconfig.json --project ../shared/tsconfig.json --project ../agent-runtime/tsconfig.json --project ../cli/tsconfig.json --project tsconfig.json"
   },
   "dependencies": {
     "@santra/shared": "workspace:*",
@@ -17,6 +17,6 @@
     "@types/bun": "latest"
   },
   "peerDependencies": {
-    "typescript": "^5"
+    "typescript": "^6"
   }
 }

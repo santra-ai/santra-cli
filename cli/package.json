@@ -2,9 +2,8 @@
   "name": "@santra/cli",
   "private": true,
   "type": "module",
-  "module": "src/index.ts",
+  "module": "index.ts",
   "scripts": {
-    "dev": "bun run src/index.ts",
     "typecheck": "bunx tsc --noEmit --project tsconfig.json"
   },
   "dependencies": {
@@ -16,6 +15,6 @@
     "@types/bun": "latest"
   },
   "peerDependencies": {
-    "typescript": "^5"
+    "typescript": "^6"
   }
 }

@@ -1,14 +1,12 @@
 import type { NextRequest } from "next/server";
 import { CompletionRequestSchema } from "@santra/shared";
-import type { Message } from "@santra/shared";
+import type { AvailableModelId, Message } from "@santra/shared";
 import {
   DEFAULT_MODEL,
   buildNimMessages,
-  requestNimStream,
   createWebStreamFromNimResponse,
+  NvidiaNIM,
 } from "@llms/nvidia-nim";
-
-// route handler
 
 export async function POST(req: NextRequest): Promise<Response> {
   const apiKey = process.env["NVIDIA_API_KEY"] ?? "";
@@ -21,7 +19,7 @@ export async function POST(req: NextRequest): Promise<Response> {
     );
   }
 
-  // validate
+  // Validate request body
 
   let body: { prompt: string; messages?: Message[] };
 
@@ -39,32 +37,28 @@ export async function POST(req: NextRequest): Promise<Response> {
     return Response.json({ error: "Invalid JSON body." }, { status: 400 });
   }
 
-  // build massages
+  // Build NIM messages
 
   const messages = buildNimMessages(body.prompt, body.messages ?? []);
 
-  // calling nvidia nim
+  // Call NVIDIA NIM
 
-  let nimResponse: Response;
+  const client = new NvidiaNIM({ apiKey });
+  let nimDeltaStream: ReadableStream<Uint8Array>;
 
   try {
-    nimResponse = await requestNimStream({ apiKey, model, messages });
+    nimDeltaStream = await client.chat.message({
+      model: model as AvailableModelId,
+      messages,
+      stream: true,
+    });
   } catch (err) {
     const message =
       err instanceof Error ? err.message : "Failed to reach Nvidia NIM.";
     return Response.json({ error: message }, { status: 502 });
   }
 
-  if (!nimResponse.ok || !nimResponse.body) {
-    const text = await nimResponse.text().catch(() => "");
-    console.error(`[web] NIM error ${nimResponse.status}:`, text);
-    return Response.json(
-      { error: `Upstream error: ${nimResponse.status}` },
-      { status: 502 },
-    );
-  }
-
-  const stream = createWebStreamFromNimResponse(nimResponse);
+  const stream = createWebStreamFromNimResponse(nimDeltaStream);
 
   return new Response(stream, {
     status: 200,

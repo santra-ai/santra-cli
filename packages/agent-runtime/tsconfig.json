@@ -1,4 +1,10 @@
 {
   "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "paths": {
+      "@santra/shared": ["../shared/index.ts"],
+      "@santra/shared/*": ["../shared/*"]
+    }
+  },
   "include": ["**/*.ts"]
 }

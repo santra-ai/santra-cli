@@ -1,4 +1,15 @@
 {
   "extends": "../../tsconfig.json",
-  "include": ["index.ts", "schemas/**/*.ts", "types/**/*.ts"]
+  "compilerOptions": {
+    "paths": {
+      "@santra/agent-runtime": ["../agent-runtime/index.ts"],
+      "@santra/agent-runtime/*": ["../agent-runtime/*"]
+    }
+  },
+  "include": [
+    "index.ts",
+    "constants/**/*.ts",
+    "schemas/**/*.ts",
+    "types/**/*.ts"
+  ]
 }
