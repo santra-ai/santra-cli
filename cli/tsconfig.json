@@ -10,5 +10,5 @@
       "@santra/core/*": ["../core/*"]
     }
   },
-  "include": ["src/**/*.ts", "index.ts"]
+  "include": ["src/**/*.ts", "src/**/*.tsx", "index.ts"]
 }

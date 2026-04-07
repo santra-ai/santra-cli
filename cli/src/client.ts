@@ -5,6 +5,7 @@ import type { RunState, Message } from "@santra/shared";
 export type ClientRunOptions = {
   prompt: string;
   previousState?: RunState;
+  onDelta?: (chunk: string) => void;
 };
 
 export type ClientConfig = {
@@ -17,15 +18,8 @@ export class Client {
 
   constructor(config: ClientConfig = {}) {
     const agent = getAgent(config.agentId ?? "base");
-
-    this.systemMessage = {
-      role: "system",
-      content: agent.description,
-    };
-
-    this.runner = new Runner({
-      endpoint: agent.endpoint,
-    });
+    this.systemMessage = { role: "system", content: agent.description };
+    this.runner = new Runner({ endpoint: agent.endpoint });
   }
 
   async run(options: ClientRunOptions): Promise<RunState> {
@@ -35,16 +29,10 @@ export class Client {
       this.systemMessage,
     ];
 
-    const state = await this.runner.run({
+    return this.runner.run({
       prompt: options.prompt,
       previousMessages,
-      onDelta: (chunk) => {
-        process.stdout.write(chunk);
-      },
+      onDelta: options.onDelta,
     });
-
-    process.stdout.write("\n\n");
-
-    return state;
   }
 }
