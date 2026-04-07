@@ -1,4 +1,14 @@
 {
   "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "paths": {
+      "@santra/shared": ["../packages/shared/index.ts"],
+      "@santra/shared/*": ["../packages/shared/*"],
+      "@santra/agent-runtime": ["../packages/agent-runtime/index.ts"],
+      "@santra/agent-runtime/*": ["../packages/agent-runtime/*"],
+      "@santra/core": ["../core/index.ts"],
+      "@santra/core/*": ["../core/*"]
+    }
+  },
   "include": ["src/**/*.ts", "index.ts"]
 }

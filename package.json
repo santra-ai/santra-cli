@@ -10,7 +10,7 @@
   },
   "license": "Apache-2.0",
   "scripts": {
-    "web": "bun --cwd web run dev",
+    "web": "cd web && bun run dev",
     "cli": "bun cli/index.ts",
     "typecheck": "bunx tsc --noEmit --project tsconfig.json"
   },
@@ -24,6 +24,6 @@
     "@types/bun": "latest"
   },
   "peerDependencies": {
-    "typescript": "^5"
+    "typescript": "^6"
   }
 }
