@@ -1,6 +1,8 @@
 export type {
   Role,
   Message,
+  AgentId,
+  ThinkingStep,
   ToolName,
   ToolCallRequest,
   ToolCallResult,

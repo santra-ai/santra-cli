@@ -3,86 +3,77 @@ import type {
   CompletionRequest,
   WebStreamEvent,
   RunState,
+  AgentPhase,
+  ToolCallRequest,
+  ToolCallResult,
+  ThinkingStep,
+  AgentId,
 } from "@santra/shared";
+import { StreamParser } from "./tools/parser.ts";
+import { executeToolCall } from "./tools/local-runner.ts";
 
-// Agent Specific Types
 export type AgentRunOptions = {
   prompt: string;
+  agentId?: AgentId;
+  systemPrompt?: string;
   previousMessages?: Message[];
   onDelta?: (chunk: string) => void;
+  onPhase?: (phase: AgentPhase) => void;
+  maxToolIterations?: number;
 };
 
-// web sse parser
-// parses the protocol that /web/api/v1/completions sends back
+// ─── SSE helpers ──────────────────────────────────────────────────────────────
 
-function parseWebSSELine(raw: string): WebStreamEvent | null {
+function parseSSELine(raw: string): WebStreamEvent | null {
   const line = raw.trim();
   if (!line.startsWith("data:")) return null;
-
   const payload = line.slice("data:".length).trim();
   if (!payload) return null;
-
   try {
     return JSON.parse(payload) as WebStreamEvent;
-  } catch (error) {
+  } catch {
     return null;
   }
 }
 
-async function* readWebStream(reader: {
+async function* readSSE(reader: {
   read(): Promise<{ done: boolean; value?: Uint8Array }>;
 }): AsyncGenerator<WebStreamEvent> {
-  const decoder = new TextDecoder();
-  let buffer = "";
-
+  const dec = new TextDecoder();
+  let buf = "";
   while (true) {
     const { done, value } = await reader.read();
-
     if (done) return;
-
-    buffer += decoder.decode(value, { stream: true });
-
-    const lines = buffer.split("\n");
-    buffer = lines.pop() ?? "";
-
+    buf += dec.decode(value, { stream: true });
+    const lines = buf.split("\n");
+    buf = lines.pop() ?? "";
     for (const line of lines) {
       if (!line.trim()) continue;
-
-      const event = parseWebSSELine(line);
-      if (!event) continue;
-
-      yield event;
-
-      // Stop consuming after finish or error — no more events expected
-      if (event.type === "finish" || event.type === "error") return;
+      const ev = parseSSELine(line);
+      if (!ev) continue;
+      yield ev;
+      if (ev.type === "finish" || ev.type === "error") return;
     }
   }
 }
 
-// this is my base agent.
-// makes a request to /web/api/v1/completetions.
-// santra handles nvidia nim and streams back in out webSteamEvent Protocol.
-// Base Agent consumes that stream and resolves to the Runstate.
-
-// has zero knowledgeo of which llm provider web uses -- to be added in future.
+// ─── BaseAgent ────────────────────────────────────────────────────────────────
 
 export class BaseAgent {
   constructor(private readonly endpoint: string) {}
 
-  async run(options: AgentRunOptions): Promise<RunState> {
-    const { prompt, previousMessages = [], onDelta } = options;
-
-    const userMessage: Message = { role: "user", content: prompt };
-    const messages: Message[] = [...previousMessages, userMessage];
-
-    const body: CompletionRequest = { prompt, messages };
-
-    // simple fetch method calling
-
-    let response: Response;
-
+  // Single network turn — returns the full LLM response text
+  private async singleTurn(
+    messages: Message[],
+    onDelta?: (c: string) => void,
+  ): Promise<{ text: string; error?: string }> {
+    const body: CompletionRequest = {
+      prompt: messages.at(-1)?.content ?? "",
+      messages,
+    };
+    let resp: Response;
     try {
-      response = await fetch(this.endpoint, {
+      resp = await fetch(this.endpoint, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -91,77 +82,108 @@ export class BaseAgent {
         body: JSON.stringify(body),
       });
     } catch (err) {
-      const message = err instanceof Error ? err.message : "Network error";
-      return { messages, output: { type: "error", message } };
-    }
-
-    if (!response.ok) {
       return {
-        messages,
-        output: {
-          type: "error",
-          message: `Web returned ${response.status}: ${response.statusText}`,
-          statusCode: response.status,
-        },
+        text: "",
+        error: err instanceof Error ? err.message : "Network error",
       };
     }
+    if (!resp.ok)
+      return { text: "", error: `HTTP ${resp.status}: ${resp.statusText}` };
+    if (!resp.body) return { text: "", error: "Empty response body" };
 
-    if (!response.body) {
-      return {
-        messages,
-        output: { type: "error", message: "Response body is empty." },
-      };
+    const reader = resp.body.getReader();
+    let finalText = "";
+    for await (const ev of readSSE(reader)) {
+      if (ev.type === "delta") onDelta?.(ev.content);
+      if (ev.type === "text") finalText = ev.text;
+      if (ev.type === "error") return { text: finalText, error: ev.message };
     }
+    return { text: finalText };
+  }
 
-    // consume sse stream send my server
+  // Agentic loop — calls LLM, executes tool calls, feeds results back, repeats
+  async run(options: AgentRunOptions): Promise<RunState> {
+    const {
+      prompt,
+      agentId = "executor",
+      systemPrompt,
+      previousMessages = [],
+      onDelta,
+      onPhase,
+      maxToolIterations = 8,
+    } = options;
 
-    const reader = response.body.getReader();
-    let finalContent = "";
+    const messages: Message[] = [
+      ...(systemPrompt
+        ? [{ role: "system" as const, content: systemPrompt }]
+        : []),
+      ...previousMessages,
+      { role: "user" as const, content: prompt },
+    ];
 
-    for await (const event of readWebStream(reader)) {
-      switch (event.type) {
-        case "start":
-          // stream started : no data to send.
-          break;
+    const allToolResults: ToolCallResult[] = [];
+    const allThinking: ThinkingStep[] = [];
+    let finalText = "";
 
-        case "delta":
-          // first token arroved. print first token.
-          onDelta?.(event.content);
-          break;
+    for (let i = 0; i < maxToolIterations; i++) {
+      const { text, error } = await this.singleTurn(messages, onDelta);
 
-        case "reasoning":
-          // reasoning token ignoring for now.
-          break;
-
-        case "text":
-          // sending complete final thing for web
-          finalContent = event.text;
-          break;
-
-        case "finish":
-          // done now exit the loop
-          break;
-
-        case "error":
-          return {
-            messages,
-            output: {
-              type: "error",
-              message: event.message,
-              statusCode: event.statusCode,
-            },
-          };
+      if (error) {
+        return {
+          messages,
+          output: { type: "error", message: error },
+          toolCalls: allToolResults,
+          thinking: allThinking,
+        };
       }
-    }
 
-    const assistantMessage: Message = {
-      role: "assistant",
-      content: finalContent,
-    };
+      // Parse tool calls and thinking out of the response
+      const toolCalls: ToolCallRequest[] = [];
+      let textContent = "";
+
+      const parser = new StreamParser((chunk) => {
+        if (chunk.type === "text") {
+          textContent += chunk.content;
+        } else if (chunk.type === "thinking") {
+          const step: ThinkingStep = { agentId, content: chunk.content };
+          allThinking.push(step);
+          onPhase?.({ type: "thinking", agentId, delta: chunk.content });
+        } else if (chunk.type === "tool_call") {
+          toolCalls.push(chunk.call);
+        }
+      });
+      parser.push(text);
+      parser.finish();
+
+      // Add raw assistant message to history
+      messages.push({ role: "assistant", content: text });
+
+      if (toolCalls.length === 0) {
+        finalText = textContent || text;
+        break;
+      }
+
+      // Execute each tool call and collect results
+      const resultBlocks: string[] = [];
+      for (const call of toolCalls) {
+        onPhase?.({ type: "tool_call", call });
+        const result = await executeToolCall(call);
+        allToolResults.push(result);
+        onPhase?.({ type: "tool_result", result });
+        resultBlocks.push(
+          `<tool_result name="${result.name}" id="${result.id}">\n${result.output}\n</tool_result>`,
+        );
+      }
+
+      // Feed tool results back as a user message for next iteration
+      messages.push({ role: "user", content: resultBlocks.join("\n\n") });
+    }
 
     return {
-      messages: [...messages, assistantMessage],
-      output: { type: "text", content: finalContent },
+      messages: [...messages, { role: "assistant", content: finalText }],
+      output: { type: "text", content: finalText },
+      toolCalls: allToolResults,
+      thinking: allThinking,
     };
   }
 }
