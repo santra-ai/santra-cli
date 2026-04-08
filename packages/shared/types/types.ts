@@ -20,7 +20,8 @@ export type WebStreamEvent =
 // agent output
 export type AgentOutput =
   | { type: "text"; content: string }
-  | { type: "error"; message: string; statusCode?: number };
+  | { type: "error"; message: string; statusCode?: number }
+  | { type: "lastMessage"; content: [] };
 
 // RunState Types
 export type RunState = {
