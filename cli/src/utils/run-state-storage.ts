@@ -5,6 +5,12 @@ import * as fs from "fs";
 import type { RunState } from "@santra/shared";
 import type { SessionState } from "../types/session-state";
 
+export type StoredChatSummary = {
+  chatId: string;
+  updatedAt: number;
+  preview: string;
+};
+
 const APP_NAME = "santra";
 const PROJECT_NAME = path.basename(process.cwd());
 const CONFIG_DIR = path.join(os.homedir(), ".config");
@@ -60,5 +66,73 @@ export function saveRunState({
   } catch (error) {
     if (error instanceof Error) console.error(error.message);
     else console.error(String(error));
+  }
+}
+
+function getChatsDirectoryPath() {
+  return path.join(CONFIG_DIR, APP_NAME, "projects", PROJECT_NAME, "chats");
+}
+
+function getPreviewText(sessionState: SessionState): string {
+  const lastVisibleMessage = [...sessionState.mainAgentState.messageHistory]
+    .reverse()
+    .find((message) => message.role != "system");
+
+  if (!lastVisibleMessage) return "Emtpy session";
+
+  const text = lastVisibleMessage.content.replace(/\s+/g, " ").trim();
+
+  return text.length > 48 ? `${text.slice(0, 48)}...` : text;
+}
+
+export function listSavedChats(): StoredChatSummary[] {
+  const chatsDir = getChatsDirectoryPath();
+  console.log("looking for saved chats in:", chatsDir, fs.existsSync(chatsDir));
+  if (!fs.existsSync(chatsDir)) return [];
+  const savedChats = fs
+    .readdirSync(chatsDir, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory)
+    .map((entry) => {
+      console.log(entry);
+      const chatId = entry.name;
+      const runStateFilePath = path.join(
+        getRunStateDirectoryPath(chatId),
+        RUN_STATE_FILENAME,
+      );
+
+      if (!fs.existsSync(runStateFilePath)) return null;
+
+      const raw = fs.readFileSync(runStateFilePath, "utf-8");
+      const sessionState = JSON.parse(raw) as SessionState;
+      const stat = fs.statSync(runStateFilePath);
+
+      return {
+        chatId,
+        updatedAt: stat.mtimeMs,
+        preview: getPreviewText(sessionState),
+      };
+    })
+    .filter((chat) => chat != null)
+    .sort((a, b) => b.updatedAt - a.updatedAt);
+  console.log("saved chats:", savedChats);
+  return savedChats;
+}
+
+export function loadRunState(chatId: string): RunState | undefined {
+  try {
+    const runStateFilePath = path.join(
+      getRunStateDirectoryPath(chatId),
+      RUN_STATE_FILENAME,
+    );
+
+    const raw = fs.readFileSync(runStateFilePath, "utf-8");
+    const sessionState = JSON.parse(raw) as SessionState;
+
+    return {
+      messages: sessionState.mainAgentState.messageHistory,
+      output: { type: "lastMessage", content: [] },
+    };
+  } catch {
+    return undefined;
   }
 }
