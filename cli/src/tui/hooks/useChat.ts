@@ -1,7 +1,8 @@
 import { useCallback, useRef, useState } from "react";
 import type { ChatMessage, ActivityEvent } from "../types.ts";
-import type { RunState, AgentPhase } from "@santra/shared";
+import type { RunState, AgentPhase, Message } from "@santra/shared";
 import { Client } from "../../client.ts";
+import { loadRunState } from "../../utils/run-state-storage.ts";
 
 interface UseChatReturn {
   messages: ChatMessage[];
@@ -10,6 +11,7 @@ interface UseChatReturn {
   currentAgent: string | null;
   busy: boolean;
   submit: (prompt: string, useSwarm?: boolean) => Promise<void>;
+  resume: (chatId: string) => void;
 }
 
 export function useChat(): UseChatReturn {
@@ -29,6 +31,37 @@ export function useChat(): UseChatReturn {
   const pushActivity = useCallback((e: ActivityEvent) => {
     setActivity((prev) => [...prev.slice(-30), e]);
   }, []);
+
+  const resume = useCallback(
+    (chatId: string) => {
+      const state = loadRunState(chatId);
+
+      if (!state) {
+        appendMessage({
+          role: "error",
+          text: `Could not load sesssion: ${chatId}`,
+        });
+        return;
+      }
+
+      runStateRef.current = state;
+
+      setStreaming("");
+      setMessages(
+        state.messages
+          .map((message: Message): ChatMessage | null => {
+            if (message.role === "system") return null;
+
+            return {
+              role: message.role === "assistant" ? "agent" : "user",
+              text: message.content,
+            };
+          })
+          .filter((message) => message !== null),
+      );
+    },
+    [appendMessage],
+  );
 
   const submit = useCallback(
     async (prompt: string, useSwarm = false) => {
@@ -103,5 +136,5 @@ export function useChat(): UseChatReturn {
     [appendMessage, pushActivity],
   );
 
-  return { messages, streamingText, activity, currentAgent, busy, submit };
+  return { messages, streamingText, activity, currentAgent, busy, submit, resume };
 }
