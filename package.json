@@ -12,7 +12,7 @@
   "scripts": {
     "web": "cd web && bun run dev",
     "cli": "bun cli/index.ts",
-    "tui": "cd cli && bun run tui",
+    "tui": "bun cli/src/tui/index.tsx",
     "typecheck": "bunx tsc --noEmit --project tsconfig.json"
   },
   "workspaces": [

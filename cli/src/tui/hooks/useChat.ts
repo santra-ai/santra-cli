@@ -1,13 +1,15 @@
 import { useCallback, useRef, useState } from "react";
 import type { ChatMessage } from "../types";
-import type { RunState } from "@santra/shared";
+import type { Message, RunState } from "@santra/shared";
 import { Client } from "../../client";
+import { loadRunState } from "../../utils/run-state-storage";
 
 interface UseChatReturn {
   messages: ChatMessage[];
   streamingText: string;
   busy: boolean;
   submit: (prompt: string) => Promise<void>;
+  resume: (chatId: string) => void;
 }
 
 export function useChat(): UseChatReturn {
@@ -21,6 +23,37 @@ export function useChat(): UseChatReturn {
   const appendMessage = useCallback((message: ChatMessage) => {
     setMessages((prev) => [...prev, message]);
   }, []);
+
+  const resume = useCallback(
+    (chatId: string) => {
+      const state = loadRunState(chatId);
+
+      if (!state) {
+        appendMessage({
+          role: "error",
+          text: `Could not load sesssion: ${chatId}`,
+        });
+        return;
+      }
+
+      runStateRef.current = state;
+
+      setStreaming("");
+      setMessages(
+        state.messages
+          .map((message: Message): ChatMessage | null => {
+            if (message.role === "system") return null;
+
+            return {
+              role: message.role === "assistant" ? "agent" : "user",
+              text: message.content,
+            };
+          })
+          .filter((message) => message !== null),
+      );
+    },
+    [appendMessage],
+  );
 
   const submit = useCallback(
     async (prompt: string) => {
@@ -60,5 +93,5 @@ export function useChat(): UseChatReturn {
     [appendMessage],
   );
 
-  return { messages, streamingText, busy, submit };
+  return { messages, streamingText, busy, submit, resume };
 }
