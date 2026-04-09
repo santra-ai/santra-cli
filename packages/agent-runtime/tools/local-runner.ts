@@ -4,6 +4,7 @@ import { existsSync } from "node:fs";
 import { join, dirname, resolve } from "node:path";
 
 // ─── Handlers
+// Read a file from disk and return its content plus a small metadata summary.
 async function handleReadFile(p: Record<string, unknown>): Promise<string> {
   const path = p["path"] as string;
   if (!path) throw new Error("read_file: 'path' is required");
@@ -13,6 +14,7 @@ async function handleReadFile(p: Record<string, unknown>): Promise<string> {
   return JSON.stringify({ path, content, lines: content.split("\n").length });
 }
 
+// Write content to a file, creating parent folders when needed.
 async function handleWriteFile(p: Record<string, unknown>): Promise<string> {
   const path = p["path"] as string;
   const content = p["content"] as string;
@@ -28,6 +30,7 @@ async function handleWriteFile(p: Record<string, unknown>): Promise<string> {
   });
 }
 
+// List direct children of a directory with simple file/directory metadata.
 async function handleListDirectory(
   p: Record<string, unknown>,
 ): Promise<string> {
@@ -43,6 +46,7 @@ async function handleListDirectory(
   return JSON.stringify({ path, entries: result });
 }
 
+// Find files matching a glob pattern under a given working directory.
 async function handleSearchFiles(p: Record<string, unknown>): Promise<string> {
   const pattern = p["pattern"] as string;
   const cwd = (p["cwd"] as string) ?? ".";
@@ -58,6 +62,7 @@ async function handleSearchFiles(p: Record<string, unknown>): Promise<string> {
 
 // ─── Dispatcher
 
+// Execute one tool call and always return a structured success/error result.
 export async function executeToolCall(
   call: ToolCallRequest,
 ): Promise<ToolCallResult> {

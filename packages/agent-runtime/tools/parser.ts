@@ -11,6 +11,7 @@ const THINKING_OPEN = "<thinking>";
 const THINKING_CLOSE = "</thinking>";
 const TOOL_CLOSE = "</tool_call>";
 
+// StreamParser reads mixed model output and extracts text, thinking, and tool calls.
 export class StreamParser {
   private buffer = "";
   private state: ParserState = "idle";
@@ -19,11 +20,13 @@ export class StreamParser {
 
   constructor(private readonly onChunk: (chunk: ParsedChunk) => void) {}
 
+  // Add new text chunk from the model stream and parse whatever is complete.
   push(text: string): void {
     this.buffer += text;
     this.flush();
   }
 
+  // Flush any remaining plain text when stream is finished.
   finish(): void {
     if (this.state === "idle" && this.buffer.length > 0) {
       this.onChunk({ type: "text", content: this.buffer });
@@ -31,6 +34,7 @@ export class StreamParser {
     }
   }
 
+  // Core parser loop that tracks the current tag state and emits parsed chunks.
   private flush(): void {
     while (this.buffer.length > 0) {
       if (this.state === "idle") {
@@ -129,6 +133,7 @@ export class StreamParser {
 }
 
 // Parse a complete (non-streaming) string
+// Handy helper when you already have the full model output in one string.
 export function parseFullText(text: string): ParsedChunk[] {
   const out: ParsedChunk[] = [];
   const p = new StreamParser((c) => out.push(c));

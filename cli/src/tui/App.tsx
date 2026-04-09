@@ -1,59 +1,51 @@
-import { Box } from "ink";
-import { useInput } from "ink";
+import { Box, useInput } from "ink";
 import { useState } from "react";
 import { useChat } from "./hooks/useChat.ts";
 import { Header } from "./components/Header.tsx";
 import { MessageList } from "./components/MessageList.tsx";
 import { InputBar } from "./components/InputBar.tsx";
+import { ActivityPanel } from "./components/ActivityPanel.tsx";
 
 export function App() {
-  const [inputValue, setInputValue] = useState("");
-  const { messages, streamingText, busy, submit } = useChat();
+  const [input, setInput] = useState("");
+  const { messages, streamingText, activity, currentAgent, busy, submit } =
+    useChat();
+  const isSwarm = input.startsWith("/swarm ");
 
-  useInput(
-    (
-      char: string,
-      key: {
-        return?: boolean;
-        backspace?: boolean;
-        delete?: boolean;
-        ctrl?: boolean;
-        meta?: boolean;
-      },
-    ) => {
-      const isBackspace =
-        key.backspace ||
-        key.delete ||
-        char === "\b" ||
-        char === "\x7f" ||
-        (key.ctrl && char?.toLowerCase() === "h");
+  useInput((char, key) => {
+    const isBS =
+      key.backspace ||
+      key.delete ||
+      char === "\b" ||
+      char === "\x7f" ||
+      (key.ctrl && char?.toLowerCase() === "h");
 
-      if (isBackspace) {
-        setInputValue((prev) => prev.slice(0, -1));
-        return;
-      }
+    if (isBS) {
+      setInput((p) => p.slice(0, -1));
+      return;
+    }
+    if (busy) return;
 
-      if (busy) return;
+    if (key.return) {
+      const raw = input.trim();
+      if (!raw) return;
+      setInput("");
+      const useSwarm = raw.startsWith("/swarm ");
+      const prompt = useSwarm ? raw.slice("/swarm ".length).trim() : raw;
+      if (!prompt) return;
+      submit(prompt, useSwarm);
+      return;
+    }
 
-      if (key.return) {
-        const prompt = inputValue.trim();
-        if (!prompt) return;
-        setInputValue("");
-        submit(prompt);
-        return;
-      }
-
-      if (char && !key.ctrl && !key.meta) {
-        setInputValue((prev) => prev + char);
-      }
-    },
-  );
+    if (char && !key.ctrl && !key.meta) setInput((p) => p + char);
+  });
 
   return (
     <Box flexDirection="column" width="100%" height="100%">
       <Header />
       <MessageList messages={messages} streamingText={streamingText} />
-      <InputBar value={inputValue} busy={busy} />
+      <ActivityPanel activity={activity} currentAgent={currentAgent} />
+      <InputBar value={input} busy={busy} isSwarmMode={isSwarm} />
     </Box>
   );
 }

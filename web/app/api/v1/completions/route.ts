@@ -8,6 +8,7 @@ import {
   NvidiaNIM,
 } from "@llms/nvidia-nim";
 
+// Main completion endpoint: validates input, calls NIM, then streams SSE back.
 export async function POST(req: NextRequest): Promise<Response> {
   const apiKey = process.env["NVIDIA_API_KEY"] ?? "";
   const model = process.env["NVIDIA_MODEL"] ?? DEFAULT_MODEL;
@@ -72,6 +73,7 @@ export async function POST(req: NextRequest): Promise<Response> {
   });
 }
 
+// CORS preflight handler for browser clients.
 export async function OPTIONS(): Promise<Response> {
   return new Response(null, {
     status: 204,

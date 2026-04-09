@@ -1,5 +1,6 @@
 import { TOOL_DEFINITIONS } from "./definitions";
 
+// Build a plain-text prompt that teaches the model which tools exist and how to call them.
 export function buildToolInstructionsPrompt(): string {
   const toolsBlock = TOOL_DEFINITIONS.map((tool) => {
     const params = Object.entries(tool.parameters)

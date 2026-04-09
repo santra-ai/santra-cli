@@ -24,6 +24,7 @@ export type AgentRunOptions = {
 
 // ─── SSE helpers ──────────────────────────────────────────────────────────────
 
+// Parse one raw SSE line from the web endpoint into a typed event.
 function parseSSELine(raw: string): WebStreamEvent | null {
   const line = raw.trim();
   if (!line.startsWith("data:")) return null;
@@ -36,6 +37,7 @@ function parseSSELine(raw: string): WebStreamEvent | null {
   }
 }
 
+// Read the SSE response stream and yield typed events one by one.
 async function* readSSE(reader: {
   read(): Promise<{ done: boolean; value?: Uint8Array }>;
 }): AsyncGenerator<WebStreamEvent> {
@@ -62,7 +64,7 @@ async function* readSSE(reader: {
 export class BaseAgent {
   constructor(private readonly endpoint: string) {}
 
-  // Single network turn — returns the full LLM response text
+  // Run a single network turn and collect the final text for that turn.
   private async singleTurn(
     messages: Message[],
     onDelta?: (c: string) => void,
@@ -101,7 +103,7 @@ export class BaseAgent {
     return { text: finalText };
   }
 
-  // Agentic loop — calls LLM, executes tool calls, feeds results back, repeats
+  // Run the agent loop: call model, execute tools, feed results back, repeat.
   async run(options: AgentRunOptions): Promise<RunState> {
     const {
       prompt,

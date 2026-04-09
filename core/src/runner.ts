@@ -2,6 +2,7 @@ import { BaseAgent, Swarm } from "@santra/agent-runtime";
 import type { RunState } from "@santra/shared";
 import type { RunnerOptions, RunOptions } from "./types.ts";
 
+// Runner decides whether to use single-agent mode or swarm mode for a request.
 export class Runner {
   private readonly agent: BaseAgent;
   private readonly swarm: Swarm;
@@ -15,6 +16,7 @@ export class Runner {
     this.swarm = new Swarm(options.endpoint);
   }
 
+  // Execute one prompt and normalize the return shape for callers.
   async run(options: RunOptions): Promise<RunState> {
     const swarm = options.useSwarm ?? this.useSwarm;
 

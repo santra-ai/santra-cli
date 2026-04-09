@@ -71,6 +71,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   },
 ];
 
+// Return one tool definition by name so callers can validate or inspect it.
 export function getToolDefinition(name: ToolName): ToolDefinition | undefined {
   return TOOL_DEFINITIONS.find((t) => t.name === name);
 }

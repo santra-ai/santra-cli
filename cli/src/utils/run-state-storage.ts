@@ -10,14 +10,17 @@ const PROJECT_NAME = path.basename(process.cwd());
 const CONFIG_DIR = path.join(os.homedir(), ".config");
 export const RUN_STATE_FILENAME = "run-state.json";
 
+// Make sure the target directory exists before reading or writing files in it.
 function ensureDirectoryExistence(dir: string) {
   fs.mkdirSync(dir, { recursive: true });
 }
 
+// Create a filesystem-safe chat id from current timestamp.
 export function createChatId() {
   return new Date().toISOString().replace(/:/g, "-");
 }
 
+// Build and create the folder where one chat run-state file is stored.
 export function getRunStateDirectoryPath(chatId: string) {
   const dir = path.join(
     CONFIG_DIR,
@@ -37,6 +40,7 @@ export function getRunStateDirectoryPath(chatId: string) {
  * Save RunState to disk
  * eg. /Users/sagarmandal/.config/santra/projects/santra-cli/chats/2026-04-07T11-07-07.641Z/run-state.json
  */
+// Persist the current run state so the same chat can be resumed later.
 export function saveRunState({
   state,
   chatId,

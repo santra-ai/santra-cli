@@ -19,6 +19,7 @@ type OrchestratorPlan = {
   direct_answer?: string;
 };
 
+// Try to parse the orchestrator output as structured JSON plan.
 function parsePlan(text: string): OrchestratorPlan | null {
   try {
     const clean = text.replace(/```json|```/g, "").trim();
@@ -28,6 +29,7 @@ function parsePlan(text: string): OrchestratorPlan | null {
   }
 }
 
+// Swarm coordinates multiple specialized agents to solve one task.
 export class Swarm {
   private agent: BaseAgent;
 
@@ -35,6 +37,7 @@ export class Swarm {
     this.agent = new BaseAgent(endpoint);
   }
 
+  // Execute the full multi-agent flow and return everything needed by the caller.
   async run(options: SwarmOptions): Promise<SwarmState> {
     const { task, onPhase, previousMessages = [] } = options;
 
@@ -47,6 +50,7 @@ export class Swarm {
       onPhase?.(phase);
     };
 
+    // Small helper that runs one named agent and reports progress as phases.
     const runAgent = async (agentId: AgentId, prompt: string, maxIter = 6) => {
       emit({ type: "agent_start", agentId, task: prompt.slice(0, 120) });
       const promptWithSystem = `${AGENT_PROMPTS[agentId]}\n\n${prompt}`;

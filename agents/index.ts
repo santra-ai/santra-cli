@@ -16,6 +16,7 @@ const registry: Record<string, AgentDefinition> = {
   [baseAgent.id]: baseAgent,
 };
 
+// Look up one agent definition by id and fail fast if it is missing.
 export function getAgent(id: string): AgentDefinition {
   const agent = registry[id];
   if (!agent) throw new Error(`Agent "${id}" not found in registry.`);

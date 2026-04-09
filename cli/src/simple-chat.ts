@@ -20,6 +20,7 @@ const rl = readline.createInterface({
 // 1. on every new start it create chat directory run-state.json persistence only
 // 2. on every iteration it should append the history to run-state.json then onward
 
+// Returns true when the user asked to end the chat session.
 function shouldExit(value: string) {
   const normalized = value.trim().toLocaleLowerCase();
   return normalized === "exit" || normalized === "quit";
