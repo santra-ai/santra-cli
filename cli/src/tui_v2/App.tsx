@@ -107,7 +107,7 @@ export function App() {
     };
   }, [stdout]);
 
-  const { tasks, files, log, stats } = useAgent();
+  const { tasks, files, log, stats, shell, busy, savedChats, submit, resume, handleCommand } = useAgent();
   const [activeTab, setActiveTab] = useState<Tab>("log");
   const [scrollOffset, setScrollOffset] = useState(0);
   const prevLogLenRef = useRef(log.length);
@@ -115,7 +115,7 @@ export function App() {
   // Input state
   const [inputValue, setInputValue] = useState("");
   const [selectedSuggestion, setSelectedSuggestion] = useState(0);
-  const suggestions = getSlashSuggestions(inputValue);
+  const suggestions = getSlashSuggestions(inputValue, savedChats);
 
   const mainWidth = termWidth - SIDEBAR_WIDTH;
 
@@ -152,8 +152,12 @@ export function App() {
       if (suggestions.length > 0) {
         const cmd = suggestions[selectedSuggestion];
         if (cmd) {
-          setInputValue(cmd.name + " ");
-          setSelectedSuggestion(0);
+          // For command suggestions, complete to "/cmd " to open sub-menu.
+          // For session suggestions, Tab has no useful expansion — Enter selects.
+          if (cmd.kind === "command") {
+            setInputValue(cmd.name + " ");
+            setSelectedSuggestion(0);
+          }
         }
       } else if (!inputValue) {
         setActiveTab((t) =>
@@ -189,15 +193,26 @@ export function App() {
       if (suggestions.length > 0) {
         const cmd = suggestions[selectedSuggestion];
         if (cmd) {
-          // TODO: wire up real command handling
+          if (cmd.kind === "session" && cmd.chatId) {
+            // User selected a saved session — restore it directly
+            resume(cmd.chatId);
+          } else {
+            const [cmdName, ...rest] = cmd.name.trim().split(" ");
+            handleCommand(cmdName ?? "", rest.join(" "));
+          }
           setInputValue("");
           setSelectedSuggestion(0);
         }
         return;
       }
       const trimmed = inputValue.trim();
-      if (!trimmed) return;
-      // TODO: wire up real message submission
+      if (!trimmed || busy) return;
+      if (trimmed.startsWith("/")) {
+        const [cmdName, ...rest] = trimmed.slice(1).split(" ");
+        handleCommand(cmdName ?? "", rest.join(" "));
+      } else {
+        submit(trimmed);
+      }
       setInputValue("");
       return;
     }
@@ -318,7 +333,7 @@ export function App() {
           <StatusBar
             stats={stats}
             inputValue={inputValue}
-            inputBusy={false}
+            inputBusy={busy}
             suggestions={suggestions}
             selectedSuggestionIdx={selectedSuggestion}
           />

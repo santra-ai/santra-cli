@@ -133,29 +133,32 @@ function LogRow({ entry, isLast, contentWidth }: LogRowProps) {
   }
 
   return (
-    <Box gap={2} paddingX={1}>
+    <Box gap={2} paddingX={1} width={contentWidth}>
       <Text color="gray" dimColor>
         {entry.time}
       </Text>
       <LogIcon level={entry.level} isLast={isLast} />
-      <Text wrap="truncate">{entry.message}</Text>
+      <Text wrap="wrap" dimColor={entry.level === "info"}>
+        {entry.message}
+      </Text>
     </Box>
   );
 }
 
 // ─── Height estimation ────────────────────────────────────────────────────────
 
-function estimateEntryHeight(entry: LogEntry): number {
+function estimateEntryHeight(entry: LogEntry, contentWidth: number): number {
   if (entry.level === "think") return 4; // label + ~2 text lines + border
   if (entry.level === "diff" && entry.diff) return 3 + entry.diff.lines.length;
   if (entry.level === "tool") {
-    // Two rows when there are arguments, one row when there aren't
     const hasArgs =
       entry.message.includes("(") &&
       entry.message.indexOf("(") < entry.message.lastIndexOf(")") - 1;
     return hasArgs ? 2 : 1;
   }
-  return 1;
+  // Normal row: text wraps into ceil(length / availableWidth) lines
+  const availableWidth = Math.max(1, contentWidth - 15);
+  return Math.max(1, Math.ceil(entry.message.length / availableWidth));
 }
 
 // ─── Agent Log ────────────────────────────────────────────────────────────────
@@ -185,7 +188,7 @@ export default function AgentLog({
   let linesUsed = 0;
   let startIdx = endIdx;
   for (let i = endIdx - 1; i >= 0; i--) {
-    const h = estimateEntryHeight(entries[i]!);
+    const h = estimateEntryHeight(entries[i]!, contentWidth);
     if (linesUsed + h > usableHeight) break;
     linesUsed += h;
     startIdx = i;
