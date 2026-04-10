@@ -30,10 +30,14 @@ export function InputBar({ value, busy }: InputBarProps) {
   const promptIcon = busy ? "◈ " : "◆ ";
   const cursor = showCursor ? "▌" : " ";
   const textColor = value ? PALETTE.white : PALETTE.muted;
-  const textValue = `${value || "ask anything"}${cursor}`;
-
+  const textValue = `${value}${cursor}`;
+  // return (
+  //   <Box>
+  //     <Text color={textColor}></Text>
+  //   </Box>
+  // );
   return (
-    <Box borderStyle="single" borderColor={borderColor} paddingX={1}>
+    <Box borderTop borderColor={borderColor} paddingX={1}>
       <Text color={promptColor} bold>
         {promptIcon}
       </Text>
