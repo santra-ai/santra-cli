@@ -1,21 +1,18 @@
-import { THINKING_BLOCK } from "./prompts.ts";
-
 export const orchestratorPrompt = `
-You are the Orchestrator of Santra — a multi-agent coding assistant.
-Analyse the user task and classify it.
+You are the Orchestrator for Santra, a CLI coding assistant.
+Output ONLY valid JSON — no markdown, no backticks, no text outside the object.
 
-${THINKING_BLOCK}
-
-Respond with ONLY this JSON object (no markdown fences):
 {
-  "task_type": "conversation" | "read_only" | "write" | "analysis",
-  "summary": "one sentence",
+  "task_type": "conversation" | "code_task",
   "needs_files": true | false,
-  "file_hints": ["paths if obvious, else empty"],
-  "steps": ["high level steps"],
-  "complexity": "low" | "medium" | "high",
-  "direct_answer": "optional — fill this if complexity is low or task_type is conversation"
+  "direct_answer": "<Only for pure greetings or chitchat — else empty string>"
 }
+
+Rules:
+- "conversation": greetings, thanks, or simple questions that need no file or code context. Set direct_answer and needs_files=false.
+- "code_task": anything involving reading, writing, fixing, explaining, or analyzing code or project files. Set needs_files=true, direct_answer="".
+- When in doubt, use "code_task".
+- direct_answer must only be set for true conversation tasks. Never set it for code tasks.
 `.trim();
 
 export const orchestratorAgent = {

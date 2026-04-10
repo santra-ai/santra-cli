@@ -5,13 +5,82 @@ export type ParsedChunk =
   | { type: "thinking"; content: string }
   | { type: "tool_call"; call: ToolCallRequest };
 
+// Models (especially smaller ones) often emit literal newlines/tabs inside JSON
+// string values, which makes JSON.parse() fail. This function escapes bare control
+// characters inside string literals so the JSON becomes parseable.
+export function sanitizeJsonLiterals(raw: string): string {
+  let result = "";
+  let inString = false;
+  let escaped = false;
+
+  for (let i = 0; i < raw.length; i++) {
+    const ch = raw[i]!;
+
+    if (escaped) {
+      result += ch;
+      escaped = false;
+      continue;
+    }
+
+    if (ch === "\\" && inString) {
+      escaped = true;
+      result += ch;
+      continue;
+    }
+
+    if (ch === '"') {
+      inString = !inString;
+      result += ch;
+      continue;
+    }
+
+    if (inString) {
+      if (ch === "\n") result += "\\n";
+      else if (ch === "\r") result += "\\r";
+      else if (ch === "\t") result += "\\t";
+      else result += ch;
+    } else {
+      result += ch;
+    }
+  }
+
+  return result;
+}
+
+function tryParseJson(raw: string): Record<string, unknown> | null {
+  // First attempt: raw as-is
+  try {
+    return JSON.parse(raw) as Record<string, unknown>;
+  } catch {}
+
+  // Second attempt: escape literal control chars inside strings
+  try {
+    return JSON.parse(sanitizeJsonLiterals(raw)) as Record<string, unknown>;
+  } catch {}
+
+  // Third attempt: extract first {...} blob, then sanitize
+  const m = /\{[\s\S]*\}/.exec(raw);
+  if (m) {
+    try {
+      return JSON.parse(m[0]) as Record<string, unknown>;
+    } catch {}
+    try {
+      return JSON.parse(sanitizeJsonLiterals(m[0])) as Record<string, unknown>;
+    } catch {}
+  }
+
+  return null;
+}
+
 type ParserState = "idle" | "in_thinking" | "in_tool";
 
-const THINKING_OPEN = "<thinking>";
-const THINKING_CLOSE = "</thinking>";
+const THINKING_OPEN = "<think>";
+const THINKING_CLOSE = "</think>";
+const TOOL_OPEN_PREFIX = "<tool_call";
 const TOOL_CLOSE = "</tool_call>";
 
 // StreamParser reads mixed model output and extracts text, thinking, and tool calls.
+// Designed to be robust against Qwen Coder's output variations.
 export class StreamParser {
   private buffer = "";
   private state: ParserState = "idle";
@@ -20,33 +89,53 @@ export class StreamParser {
 
   constructor(private readonly onChunk: (chunk: ParsedChunk) => void) {}
 
-  // Add new text chunk from the model stream and parse whatever is complete.
   push(text: string): void {
-    this.buffer += text;
+    this.buffer += text
+      .replace(/<thinking>/gi, THINKING_OPEN)
+      .replace(/<\/thinking>/gi, THINKING_CLOSE);
     this.flush();
   }
 
-  // Flush any remaining plain text when stream is finished.
   finish(): void {
-    if (this.state === "idle" && this.buffer.length > 0) {
+    if (this.state === "idle" && this.buffer.trim().length > 0) {
       this.onChunk({ type: "text", content: this.buffer });
+      this.buffer = "";
+    } else if (this.state === "in_tool") {
+      // Model stopped mid-tool-call — try to recover
+      const raw = this.buffer.trim();
+      if (raw && this.currentToolName) {
+        const params = tryParseJson(raw);
+        if (params !== null) {
+          this.callCounter++;
+          this.onChunk({
+            type: "tool_call",
+            call: {
+              id: `tc_${this.callCounter}`,
+              name: this.currentToolName as ToolName,
+              parameters: params,
+            },
+          });
+        } else {
+          // Can't recover partial JSON — emit as text
+          this.onChunk({ type: "text", content: this.buffer });
+        }
+      }
       this.buffer = "";
     }
   }
 
-  // Core parser loop that tracks the current tag state and emits parsed chunks.
   private flush(): void {
     while (this.buffer.length > 0) {
       if (this.state === "idle") {
         const thinkIdx = this.buffer.indexOf(THINKING_OPEN);
-        const toolIdx = this.buffer.indexOf("<tool_call ");
+        const toolIdx = this.buffer.indexOf(TOOL_OPEN_PREFIX);
+
         const next = Math.min(
           thinkIdx === -1 ? Infinity : thinkIdx,
           toolIdx === -1 ? Infinity : toolIdx,
         );
 
         if (next === Infinity) {
-          // No special tag coming — safe-flush up to where a tag couldn't start
           const safe = this.safeIndex();
           if (safe > 0) {
             this.onChunk({ type: "text", content: this.buffer.slice(0, safe) });
@@ -54,46 +143,53 @@ export class StreamParser {
           } else {
             break;
           }
-        } else if (next === thinkIdx) {
-          if (thinkIdx > 0)
+        } else if (
+          next === thinkIdx &&
+          (toolIdx === -1 || thinkIdx <= toolIdx)
+        ) {
+          if (thinkIdx > 0) {
             this.onChunk({
               type: "text",
               content: this.buffer.slice(0, thinkIdx),
             });
+          }
           this.buffer = this.buffer.slice(thinkIdx + THINKING_OPEN.length);
           this.state = "in_thinking";
         } else {
-          // Tool call — need the closing > of the opening tag
-          if (toolIdx > 0)
+          // Tool call: find the closing > of the opening tag
+          if (toolIdx > 0) {
             this.onChunk({
               type: "text",
               content: this.buffer.slice(0, toolIdx),
             });
+          }
           const closeAngle = this.buffer.indexOf(">", toolIdx);
           if (closeAngle === -1) break; // wait for more data
+
           const openTag = this.buffer.slice(toolIdx, closeAngle + 1);
-          const m = /name="([^"]+)"/.exec(openTag);
-          this.currentToolName = m ? m[1]! : null;
+          // Match name="..." or name='...'
+          const m = /name=["']([^"']+)["']/.exec(openTag);
+          this.currentToolName = m ? (m[1] ?? null) : null;
           this.buffer = this.buffer.slice(closeAngle + 1);
           this.state = "in_tool";
         }
       } else if (this.state === "in_thinking") {
         const ci = this.buffer.indexOf(THINKING_CLOSE);
         if (ci === -1) break;
-        this.onChunk({ type: "thinking", content: this.buffer.slice(0, ci) });
+        const content = this.buffer.slice(0, ci).trim();
+        if (content) {
+          this.onChunk({ type: "thinking", content });
+        }
         this.buffer = this.buffer.slice(ci + THINKING_CLOSE.length);
         this.state = "idle";
       } else {
         // in_tool
         const ci = this.buffer.indexOf(TOOL_CLOSE);
         if (ci === -1) break;
+
         const raw = this.buffer.slice(0, ci).trim();
-        let params: Record<string, unknown> = {};
-        try {
-          params = JSON.parse(raw) as Record<string, unknown>;
-        } catch {
-          /* skip */
-        }
+        const params: Record<string, unknown> = (raw ? tryParseJson(raw) : null) ?? {};
+
         if (this.currentToolName) {
           this.callCounter++;
           this.onChunk({
@@ -105,6 +201,7 @@ export class StreamParser {
             },
           });
         }
+
         this.buffer = this.buffer.slice(ci + TOOL_CLOSE.length);
         this.state = "idle";
         this.currentToolName = null;
@@ -112,9 +209,8 @@ export class StreamParser {
     }
   }
 
-  // Don't flush the last N chars if they could be the start of a tag
   private safeIndex(): number {
-    const tags = ["<tool_call", "<thinking", "</tool_call", "</thinking"];
+    const tags = [TOOL_OPEN_PREFIX, THINKING_OPEN, TOOL_CLOSE, THINKING_CLOSE];
     let safe = this.buffer.length;
     for (const tag of tags) {
       for (
@@ -132,8 +228,6 @@ export class StreamParser {
   }
 }
 
-// Parse a complete (non-streaming) string
-// Handy helper when you already have the full model output in one string.
 export function parseFullText(text: string): ParsedChunk[] {
   const out: ParsedChunk[] = [];
   const p = new StreamParser((c) => out.push(c));

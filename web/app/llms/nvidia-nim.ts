@@ -8,8 +8,6 @@ import type {
 
 const NVIDIA_DEFAULT_BASE_URL = "https://integrate.api.nvidia.com/v1";
 const DONE_SENTINEL = "[DONE]";
-const SYSTEM_PROMPT =
-  "You are a helpful, concise, and accurate assistant. Respond clearly and directly to the user's message.";
 
 export const DEFAULT_MODEL: AvailableModelId = "meta/llama-3.1-8b-instruct";
 
@@ -18,9 +16,6 @@ interface NvidiaNIMConfig {
   baseURL?: string;
 }
 
-// ─── NvidiaNIM class
-
-// This class wraps Nvidia's chat API and gives us a stream of plain text deltas.
 export class NvidiaNIM {
   private apiKey: string;
   private baseURL: string;
@@ -40,7 +35,6 @@ export class NvidiaNIM {
     };
   }
 
-  // Send one streamed chat request to Nvidia NIM and return a cleaned delta stream.
   private async chatMessage(
     options: ChatCompletionRequestBody,
   ): Promise<ReadableStream<Uint8Array>> {
@@ -54,6 +48,9 @@ export class NvidiaNIM {
         model: options.model,
         messages: options.messages,
         stream: options.stream,
+        // qwen2.5-coder-32b has a 32768 total context window
+        max_tokens: 16384,
+        temperature: 0.1, // Low temp for reliable tool calls
       }),
     });
 
@@ -70,6 +67,7 @@ export class NvidiaNIM {
         const decoder = new TextDecoder("utf-8");
         const encoder = new TextEncoder();
         let buffer = "";
+        let seenDone = false;
 
         while (true) {
           const { done, value } = await reader.read();
@@ -82,7 +80,10 @@ export class NvidiaNIM {
           for (const line of lines) {
             if (!line.startsWith("data: ")) continue;
             const data = line.slice("data: ".length).trim();
-            if (data === DONE_SENTINEL) break;
+            if (data === DONE_SENTINEL) {
+              seenDone = true;
+              break;
+            }
 
             try {
               const json = JSON.parse(data) as ChatCompletionChunk;
@@ -92,6 +93,8 @@ export class NvidiaNIM {
               // malformed chunk — skip
             }
           }
+
+          if (seenDone) break;
         }
 
         controller.close();
@@ -100,39 +103,43 @@ export class NvidiaNIM {
   }
 }
 
-// ─── Helpers used by route.ts
-
-// Build the message list sent to NIM, including system prompt and latest user turn.
+// ─── buildNimMessages
+// Pass messages through directly — each agent brings its own system prompt.
+// We do NOT inject a global system prompt here as it would conflict with agent prompts.
 export function buildNimMessages(
   prompt: string,
   history: Message[],
 ): ChatCompletionRequestBody["messages"] {
   const trimmedPrompt = prompt.trim();
-  const mappedHistory = history.map((m) => ({
-    role: m.role,
-    content: m.content,
-  }));
-  const lastMessage = mappedHistory.at(-1);
-  const alreadyHasPromptTurn =
-    lastMessage?.role === "user" && lastMessage.content === trimmedPrompt;
 
-  return [
-    { role: "system", content: SYSTEM_PROMPT },
-    ...mappedHistory,
-    ...(alreadyHasPromptTurn ? [] : [{ role: "user", content: trimmedPrompt }]),
-  ];
+  // If history already has messages, use them directly (they include system prompts)
+  if (history.length > 0) {
+    const mappedHistory = history.map((m) => ({
+      role: m.role,
+      content: m.content,
+    }));
+    const lastMessage = mappedHistory.at(-1);
+    const alreadyHasPromptTurn =
+      lastMessage?.role === "user" && lastMessage.content === trimmedPrompt;
+
+    return [
+      ...mappedHistory,
+      ...(alreadyHasPromptTurn
+        ? []
+        : [{ role: "user" as const, content: trimmedPrompt }]),
+    ];
+  }
+
+  // No history — just the user message
+  return [{ role: "user" as const, content: trimmedPrompt }];
 }
 
 // ─── createWebStreamFromNimResponse
-// Wraps the raw delta stream from NvidiaNIM into the WebStreamEvent SSE
-// protocol that BaseAgent in agent-runtime expects.
 
-// Format one SSE line in the structure our web route expects.
 function sseLine(data: object): string {
   return `data: ${JSON.stringify(data)}\n\n`;
 }
 
-// Convert raw NIM deltas into Santra's SSE event protocol.
 export function createWebStreamFromNimResponse(
   nimDeltaStream: ReadableStream<Uint8Array>,
 ): ReadableStream<Uint8Array> {
@@ -144,36 +151,46 @@ export function createWebStreamFromNimResponse(
       let fullContent = "";
       let closed = false;
 
-      // Push one SSE event into the output stream.
       function enqueue(data: object) {
-        if (!closed) controller.enqueue(encoder.encode(sseLine(data)));
+        if (closed) return;
+        try {
+          controller.enqueue(encoder.encode(sseLine(data)));
+        } catch {
+          closed = true;
+        }
       }
 
-      // Close the stream only once, even if multiple paths try to end it.
       function close() {
         if (!closed) {
           closed = true;
-          controller.close();
+          try {
+            controller.close();
+          } catch {
+            // Client may already be gone.
+          }
         }
       }
 
       try {
         enqueue({ type: "start" });
 
-        // Use a separate decoder with stream:true only once, not twice
         const decoder = new TextDecoder();
 
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
 
-          // value is already a clean encoded delta from NvidiaNIM class
-          // decode once here, no re-buffering issues
-          const delta = decoder.decode(value); // no { stream: true } — flush immediately
+          const delta = decoder.decode(value, { stream: true });
           if (delta) {
             fullContent += delta;
             enqueue({ type: "delta", content: delta });
           }
+        }
+
+        const finalChunk = decoder.decode();
+        if (finalChunk) {
+          fullContent += finalChunk;
+          enqueue({ type: "delta", content: finalChunk });
         }
 
         enqueue({ type: "text", text: fullContent });
@@ -186,6 +203,7 @@ export function createWebStreamFromNimResponse(
         console.error("[NvidiaNIM] stream error:", message);
         enqueue({ type: "error", message, statusCode: 500 });
       } finally {
+        await reader.cancel().catch(() => {});
         close();
       }
     },

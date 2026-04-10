@@ -25,16 +25,23 @@ export class Client {
   }
 
   async run(options: ClientRunOptions): Promise<RunState> {
-    const previousMessages: Message[] = options.previousState?.messages ?? [
-      this.systemMessage,
-    ];
+    let previousMessages: Message[];
+
+    if (
+      options.previousState?.messages &&
+      options.previousState.messages.length > 0
+    ) {
+      previousMessages = options.previousState.messages;
+    } else {
+      previousMessages = [this.systemMessage];
+    }
 
     return this.runner.run({
       prompt: options.prompt,
       previousMessages,
       onDelta: options.onDelta,
       onPhase: options.onPhase,
-      useSwarm: options.useSwarm ?? false,
+      useSwarm: options.useSwarm,
     });
   }
 }

@@ -28,28 +28,81 @@ function ResumePicker({
       marginBottom={1}
     >
       <Text color={PALETTE.orange} bold>
-        resume session
+        ◉ resume session
       </Text>
 
       {sessions.length === 0 ? (
-        <Text color={PALETTE.muted}>no saved sessions found</Text>
+        <Text color={PALETTE.muted}> no saved sessions found</Text>
       ) : (
         sessions.map((session, index) => (
-          <Text
-            key={session.chatId}
-            color={index === selectedIndex ? PALETTE.orange : PALETTE.white}
-          >
-            {index === selectedIndex ? "› " : "  "}
-            {new Date(session.updatedAt).toLocaleString()} {session.preview}
-          </Text>
+          <Box key={session.chatId} gap={1}>
+            <Text
+              color={index === selectedIndex ? PALETTE.orange : PALETTE.muted}
+            >
+              {index === selectedIndex ? "›" : " "}
+            </Text>
+            <Text
+              color={index === selectedIndex ? PALETTE.white : PALETTE.muted}
+            >
+              {new Date(session.updatedAt).toLocaleString()}
+            </Text>
+            <Text color={PALETTE.muted}>—</Text>
+            <Text
+              color={index === selectedIndex ? PALETTE.white : PALETTE.muted}
+            >
+              {session.preview}
+            </Text>
+          </Box>
         ))
       )}
 
-      <Text color={PALETTE.muted}>
-        {sessions.length === 0
-          ? "press esc to close"
-          : "up/down to select • enter to resume • esc to close"}
+      <Box marginTop={1}>
+        <Text color={PALETTE.muted}>
+          {sessions.length === 0
+            ? "esc to close"
+            : "↑↓ select  ·  enter resume  ·  esc cancel"}
+        </Text>
+      </Box>
+    </Box>
+  );
+}
+
+function HelpPanel() {
+  return (
+    <Box
+      flexDirection="column"
+      borderStyle="single"
+      borderColor={PALETTE.orangeDim}
+      paddingX={1}
+      marginX={2}
+      marginBottom={1}
+    >
+      <Text color={PALETTE.orange} bold>
+        ◆ commands
       </Text>
+      <Box gap={2}>
+        <Text color={PALETTE.muted}> /resume</Text>
+        <Text color={PALETTE.white}>resume a previous session</Text>
+      </Box>
+      <Box gap={2}>
+        <Text color={PALETTE.muted}> /help</Text>
+        <Text color={PALETTE.white}>toggle this panel</Text>
+      </Box>
+      <Box gap={2}>
+        <Text color={PALETTE.muted}> ctrl+c</Text>
+        <Text color={PALETTE.white}>exit</Text>
+      </Box>
+      <Box marginTop={1}>
+        <Text color={PALETTE.muted}>
+          santra will fan out through orchestrator → thinker → file-picker →
+          planner → executor → reviewer when the task needs repo work
+        </Text>
+      </Box>
+      <Box>
+        <Text color={PALETTE.muted}>
+          set SANTRA_DEV=1 to write full session logs to .santra-logs/
+        </Text>
+      </Box>
     </Box>
   );
 }
@@ -57,11 +110,21 @@ function ResumePicker({
 export function App() {
   const [input, setInput] = useState("");
   const [resumeOpen, setResumeOpen] = useState(false);
+  const [helpOpen, setHelpOpen] = useState(false);
   const [sessions, setSessions] = useState<StoredChatSummary[]>([]);
   const [selectedIndex, setSelectedIndex] = useState(0);
-  const { messages, streamingText, activity, currentAgent, busy, submit, resume } =
-    useChat();
-  const isSwarm = input.startsWith("/swarm ");
+  const {
+    messages,
+    streamingText,
+    streamingAgent,
+    activity,
+    currentAgent,
+    thinkingSnippet,
+    busy,
+    chatId,
+    submit,
+    resume,
+  } = useChat();
 
   useInput((char, key) => {
     if (resumeOpen) {
@@ -69,33 +132,28 @@ export function App() {
         setResumeOpen(false);
         return;
       }
-
       if (sessions.length === 0) {
         if (key.return) setResumeOpen(false);
         return;
       }
-
       if (key.upArrow) {
         setSelectedIndex((prev) =>
           prev === 0 ? sessions.length - 1 : prev - 1,
         );
         return;
       }
-
       if (key.downArrow) {
         setSelectedIndex((prev) =>
           prev === sessions.length - 1 ? 0 : prev + 1,
         );
         return;
       }
-
       if (key.return) {
         const session = sessions[selectedIndex];
         if (session) resume(session.chatId);
         setResumeOpen(false);
         return;
       }
-
       return;
     }
 
@@ -110,6 +168,7 @@ export function App() {
       setInput((p) => p.slice(0, -1));
       return;
     }
+
     if (busy) return;
 
     if (key.return) {
@@ -125,11 +184,14 @@ export function App() {
         return;
       }
 
+      if (raw === "/help") {
+        setHelpOpen((v) => !v);
+        setInput("");
+        return;
+      }
+
       setInput("");
-      const useSwarm = raw.startsWith("/swarm ");
-      const prompt = useSwarm ? raw.slice("/swarm ".length).trim() : raw;
-      if (!prompt) return;
-      submit(prompt, useSwarm);
+      submit(raw);
       return;
     }
 
@@ -138,16 +200,22 @@ export function App() {
 
   return (
     <Box flexDirection="column" width="100%" height="100%">
-      <Header />
-      <MessageList messages={messages} streamingText={streamingText} />
-      <ActivityPanel activity={activity} currentAgent={currentAgent} />
-      {resumeOpen ? (
+      <Header chatId={chatId} />
+      <MessageList
+        messages={messages}
+        streamingText={streamingText}
+        streamingAgent={streamingAgent}
+      />
+      <ActivityPanel
+        activity={activity}
+        currentAgent={currentAgent}
+        thinkingSnippet={thinkingSnippet}
+      />
+      {helpOpen && !resumeOpen && <HelpPanel />}
+      {resumeOpen && (
         <ResumePicker sessions={sessions} selectedIndex={selectedIndex} />
-      ) : null}
-      <InputBar value={input} busy={busy} isSwarmMode={isSwarm} />
-    </Box>
-  );
-}
+      )}
+      <InputBar value={input} busy={busy} currentAgent={currentAgent} />
     </Box>
   );
 }

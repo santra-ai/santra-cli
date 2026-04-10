@@ -7,18 +7,40 @@ export class Runner {
   private readonly agent: BaseAgent;
   private readonly swarm: Swarm;
   private readonly endpoint: string;
-  private readonly useSwarm: boolean;
+  private readonly useSwarm?: boolean;
 
   constructor(options: RunnerOptions) {
     this.endpoint = options.endpoint;
-    this.useSwarm = options.useSwarm ?? false;
+    this.useSwarm = options.useSwarm;
     this.agent = new BaseAgent(options.endpoint);
     this.swarm = new Swarm(options.endpoint);
   }
 
+  private shouldUseSwarm(prompt: string, override?: boolean): boolean {
+    if (override !== undefined) return override;
+
+    const trimmed = prompt.trim();
+    if (!trimmed) return false;
+
+    const simpleConversation =
+      /^(hi|hello|hey|yo|thanks|thank you|cool|nice|good morning|good evening)[!. ]*$/i.test(
+        trimmed,
+      ) ||
+      /^(who are you|what can you do|help)\??$/i.test(trimmed);
+
+    if (simpleConversation) return false;
+
+    return true;
+  }
+
   // Execute one prompt and normalize the return shape for callers.
   async run(options: RunOptions): Promise<RunState> {
-    const swarm = options.useSwarm ?? this.useSwarm;
+    const explicitMode =
+      options.useSwarm !== undefined ? options.useSwarm : this.useSwarm;
+    const swarm = this.shouldUseSwarm(
+      options.prompt,
+      explicitMode,
+    );
 
     if (swarm) {
       const state = await this.swarm.run({
@@ -27,6 +49,19 @@ export class Runner {
         previousMessages: options.previousMessages,
         onPhase: options.onPhase,
       });
+
+      if (state.error) {
+        return {
+          messages: [
+            ...(options.previousMessages ?? []),
+            { role: "user", content: options.prompt },
+          ],
+          output: { type: "error", message: state.error },
+          toolCalls: state.toolCallResults,
+          thinking: state.thinkingSteps,
+        };
+      }
+
       return {
         messages: [
           ...(options.previousMessages ?? []),

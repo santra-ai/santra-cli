@@ -10,8 +10,11 @@ export type Message = {
 export type ToolName =
   | "read_file"
   | "write_file"
+  | "str_replace"
   | "list_directory"
-  | "search_files";
+  | "search_files"
+  | "search_text"
+  | "get_cwd";
 
 export type ToolCallRequest = {
   id: string;
@@ -27,7 +30,6 @@ export type ToolCallResult = {
 };
 
 // Thinking / Reasoning
-
 export type ThinkingStep = {
   agentId: string;
   content: string;
@@ -36,8 +38,6 @@ export type ThinkingStep = {
 // Agents
 export type AgentId =
   | "orchestrator"
-  | "thinker"
-  | "planner"
   | "file-picker"
   | "executor"
   | "reviewer";
@@ -48,13 +48,11 @@ export type AgentPhase =
   | { type: "tool_result"; result: ToolCallResult }
   | { type: "agent_start"; agentId: AgentId; task: string }
   | { type: "agent_done"; agentId: AgentId; output: string }
-  | { type: "delta"; agentId: AgentId; content: string }
+  | { type: "delta"; agentId: AgentId; content: string } // streaming text from a swarm agent
   | { type: "done"; finalOutput: string }
   | { type: "error"; message: string };
 
 // Web Streaming Protocol.
-// these are the events santra's backend streams back to agent-runtime over SSE
-
 export type WebStreamEvent =
   | { type: "start" }
   | { type: "delta"; content: string }
@@ -63,7 +61,7 @@ export type WebStreamEvent =
   | { type: "finish" }
   | { type: "error"; message: string; statusCode?: number };
 
-// agent output
+// Agent output
 export type AgentOutput =
   | { type: "text"; content: string }
   | { type: "error"; message: string; statusCode?: number }
@@ -83,6 +81,7 @@ export type SwarmState = {
   finalOutput: string;
   toolCallResults: ToolCallResult[];
   thinkingSteps: ThinkingStep[];
+  error?: string;
 };
 
 // API Contract
