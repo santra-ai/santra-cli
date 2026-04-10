@@ -8,6 +8,7 @@ const projectDir = process.cwd();
 const monorepoRoot = path.resolve(projectDir, "..");
 const rootEnvPath = path.join(monorepoRoot, ".env");
 
+// Load root-level .env values into process.env when they are not already set.
 function loadRootEnv(filePath: string): void {
   if (!fs.existsSync(filePath)) return;
 
