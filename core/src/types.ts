@@ -1,4 +1,5 @@
 import type { Message, RunState, AgentPhase, SwarmState } from "@santra/shared";
+import type { FileChangeFeedback } from "@santra/agent-runtime";
 
 export type RunnerOptions = {
   endpoint: string;
@@ -11,6 +12,13 @@ export type RunOptions = {
   onDelta?: (chunk: string) => void;
   onPhase?: (phase: AgentPhase) => void;
   useSwarm?: boolean;
+  abortSignal?: AbortSignal;
+  onFileChangeReview?: (
+    callId: string,
+    filePath: string,
+    oldStr: string,
+    newStr: string,
+  ) => Promise<FileChangeFeedback>;
 };
 
 export type { RunState, SwarmState };

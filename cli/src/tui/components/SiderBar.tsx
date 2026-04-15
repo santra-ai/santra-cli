@@ -35,7 +35,7 @@ export function TaskList({ tasks }: TaskListProps) {
   return (
     <Box flexDirection="column">
       <Box paddingX={1} marginBottom={0}>
-        <Text color="gray" dimColor>
+        <Text color="gray" >
           {"TASKS".padEnd(20)}
         </Text>
       </Box>
@@ -61,11 +61,58 @@ function fileColor(status: FileEntry["status"]): string {
   return "gray";
 }
 
-function filePrefix(entry: FileEntry): string {
-  if (entry.status === "modified") return "●";
-  if (entry.status === "new") return "+";
-  if (entry.type === "dir") return "▸";
-  return " ";
+type TreeRow = {
+  key: string;
+  name: string;
+  depth: number;
+  isDir: boolean;
+  status: FileEntry["status"];
+  implicit: boolean; // true = inferred parent dir, not explicitly listed
+};
+
+/** Build a sorted, tree-structured row list from flat file entries. */
+function buildTreeRows(files: FileEntry[]): TreeRow[] {
+  // Only keep files (skip explicitly-listed dirs with no status — they add noise)
+  const fileEntries = files.filter((f) => f.type === "file");
+
+  // Sort by path so sibling dirs are grouped
+  const sorted = [...fileEntries].sort((a, b) => a.path.localeCompare(b.path));
+
+  const shownDirs = new Set<string>();
+  const rows: TreeRow[] = [];
+
+  for (const entry of sorted) {
+    // Add implicit directory nodes for each ancestor
+    const parts = entry.path.replace(/\\/g, "/").split("/");
+    const segments = parts.slice(0, -1); // all but filename
+    for (let i = 0; i < segments.length; i++) {
+      const seg = segments[i];
+      if (!seg) continue;
+      const dirPath = parts.slice(0, i + 1).join("/");
+      if (!shownDirs.has(dirPath)) {
+        shownDirs.add(dirPath);
+        rows.push({
+          key: dirPath,
+          name: seg,
+          depth: i,
+          isDir: true,
+          status: "none",
+          implicit: true,
+        });
+      }
+    }
+
+    rows.push({
+      key: entry.path,
+      name: entry.name,
+      depth: parts.length - 1,
+      isDir: false,
+      status: entry.status,
+      implicit: false,
+    });
+  }
+
+  return rows;
 }
 
 interface FileTreeProps {
@@ -73,25 +120,29 @@ interface FileTreeProps {
 }
 
 export function FileTree({ files }: FileTreeProps) {
+  const rows = buildTreeRows(files);
+
   return (
     <Box flexDirection="column">
       <Box paddingX={1} marginTop={1}>
-        <Text color="gray" dimColor>
-          {"FILES".padEnd(20)}
-        </Text>
+        <Text color="gray">{"FILES".padEnd(20)}</Text>
       </Box>
 
-      {files.map((entry) => (
+      {rows.map((row) => (
         <Box
-          key={entry.path}
-          paddingX={1}
-          paddingLeft={1 + entry.depth * 2}
+          key={row.key}
+          paddingLeft={1 + row.depth * 2}
           gap={1}
         >
-          <Text color={fileColor(entry.status)}>{filePrefix(entry)}</Text>
-          <Text color={fileColor(entry.status)} wrap="truncate">
-            {entry.name}
-          </Text>
+          {row.isDir
+            ? <Text color="gray">▸ {row.name}/</Text>
+            : <>
+                <Text color={row.status === "modified" ? "yellow" : row.status === "new" ? "green" : "gray"}>
+                  {row.status === "modified" ? "●" : row.status === "new" ? "+" : " "}
+                </Text>
+                <Text color={fileColor(row.status)} wrap="truncate">{row.name}</Text>
+              </>
+          }
         </Box>
       ))}
     </Box>

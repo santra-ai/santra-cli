@@ -1,221 +1,189 @@
-import { Box, Text, useInput } from "ink";
-import { useState } from "react";
-import { useChat } from "./hooks/useChat.ts";
-import { Header } from "./components/Header.tsx";
-import { MessageList } from "./components/MessageList.tsx";
-import { InputBar } from "./components/InputBar.tsx";
-import { ActivityPanel } from "./components/ActivityPanel.tsx";
-import {
-  listSavedChats,
-  type StoredChatSummary,
-} from "../utils/run-state-storage.ts";
-import { PALETTE } from "./constants.ts";
+import { Box, Text, useApp, useInput, useStdout } from "ink";
+import { useEffect, useRef, useState } from "react";
+import useAgent from "./hooks/useAgent";
+import { Sidebar } from "./components/SiderBar";
+import AgentLog from "./components/AgentLog";
+import StatusBar from "./components/StatusBar";
+import { getSlashSuggestions } from "./components/InputBar";
 
-function ResumePicker({
-  sessions,
-  selectedIndex,
-}: {
-  sessions: StoredChatSummary[];
-  selectedIndex: number;
-}) {
-  return (
-    <Box
-      flexDirection="column"
-      borderStyle="single"
-      borderColor={PALETTE.orangeDim}
-      paddingX={1}
-      marginX={2}
-      marginBottom={1}
-    >
-      <Text color={PALETTE.orange} bold>
-        ◉ resume session
-      </Text>
-
-      {sessions.length === 0 ? (
-        <Text color={PALETTE.muted}> no saved sessions found</Text>
-      ) : (
-        sessions.map((session, index) => (
-          <Box key={session.chatId} gap={1}>
-            <Text
-              color={index === selectedIndex ? PALETTE.orange : PALETTE.muted}
-            >
-              {index === selectedIndex ? "›" : " "}
-            </Text>
-            <Text
-              color={index === selectedIndex ? PALETTE.white : PALETTE.muted}
-            >
-              {new Date(session.updatedAt).toLocaleString()}
-            </Text>
-            <Text color={PALETTE.muted}>—</Text>
-            <Text
-              color={index === selectedIndex ? PALETTE.white : PALETTE.muted}
-            >
-              {session.preview}
-            </Text>
-          </Box>
-        ))
-      )}
-
-      <Box marginTop={1}>
-        <Text color={PALETTE.muted}>
-          {sessions.length === 0
-            ? "esc to close"
-            : "↑↓ select  ·  enter resume  ·  esc cancel"}
-        </Text>
-      </Box>
-    </Box>
-  );
-}
-
-function HelpPanel() {
-  return (
-    <Box
-      flexDirection="column"
-      borderStyle="single"
-      borderColor={PALETTE.orangeDim}
-      paddingX={1}
-      marginX={2}
-      marginBottom={1}
-    >
-      <Text color={PALETTE.orange} bold>
-        ◆ commands
-      </Text>
-      <Box gap={2}>
-        <Text color={PALETTE.muted}> /resume</Text>
-        <Text color={PALETTE.white}>resume a previous session</Text>
-      </Box>
-      <Box gap={2}>
-        <Text color={PALETTE.muted}> /help</Text>
-        <Text color={PALETTE.white}>toggle this panel</Text>
-      </Box>
-      <Box gap={2}>
-        <Text color={PALETTE.muted}> ctrl+c</Text>
-        <Text color={PALETTE.white}>exit</Text>
-      </Box>
-      <Box marginTop={1}>
-        <Text color={PALETTE.muted}>
-          santra will fan out through orchestrator → thinker → file-picker →
-          planner → executor → reviewer when the task needs repo work
-        </Text>
-      </Box>
-      <Box>
-        <Text color={PALETTE.muted}>
-          set SANTRA_DEV=1 to write full session logs to .santra-logs/
-        </Text>
-      </Box>
-    </Box>
-  );
-}
+const SIDEBAR_WIDTH = 24;
 
 export function App() {
-  const [input, setInput] = useState("");
-  const [resumeOpen, setResumeOpen] = useState(false);
-  const [helpOpen, setHelpOpen] = useState(false);
-  const [sessions, setSessions] = useState<StoredChatSummary[]>([]);
-  const [selectedIndex, setSelectedIndex] = useState(0);
-  const {
-    messages,
-    streamingText,
-    streamingAgent,
-    activity,
-    currentAgent,
-    thinkingSnippet,
-    busy,
-    chatId,
-    submit,
-    resume,
-  } = useChat();
+  const { stdout } = useStdout();
+  const { exit } = useApp();
 
-  useInput((char, key) => {
-    if (resumeOpen) {
-      if (key.escape) {
-        setResumeOpen(false);
-        return;
-      }
-      if (sessions.length === 0) {
-        if (key.return) setResumeOpen(false);
-        return;
-      }
-      if (key.upArrow) {
-        setSelectedIndex((prev) =>
-          prev === 0 ? sessions.length - 1 : prev - 1,
-        );
-        return;
-      }
-      if (key.downArrow) {
-        setSelectedIndex((prev) =>
-          prev === sessions.length - 1 ? 0 : prev + 1,
-        );
-        return;
-      }
-      if (key.return) {
-        const session = sessions[selectedIndex];
-        if (session) resume(session.chatId);
-        setResumeOpen(false);
-        return;
+  const [termWidth, setTermWidth] = useState(stdout?.columns ?? 120);
+  const [termHeight, setTermHeight] = useState(stdout?.rows ?? 24);
+
+  useEffect(() => {
+    if (!stdout) return;
+    const onResize = () => {
+      setTermWidth(stdout.columns);
+      setTermHeight(stdout.rows);
+    };
+    stdout.on("resize", onResize);
+    return () => { stdout.off("resize", onResize); };
+  }, [stdout]);
+
+  const { tasks, files, log, stats, busy, savedChats, submit, resume, handleCommand } = useAgent();
+  const [scrollOffset, setScrollOffset] = useState(0);
+  const prevLogLenRef = useRef(log.length);
+
+  const [inputValue, setInputValue] = useState("");
+  const [selectedSuggestion, setSelectedSuggestion] = useState(0);
+  const suggestions = getSlashSuggestions(inputValue, savedChats);
+
+  const mainWidth = termWidth - SIDEBAR_WIDTH;
+  const suggestionsHeight = suggestions.length > 0 ? suggestions.length + 3 : 0;
+  const logHeight = Math.max(3, termHeight - 7 - suggestionsHeight);
+
+  // Keep viewport stable when scrolled up and new entries arrive
+  useEffect(() => {
+    const added = log.length - prevLogLenRef.current;
+    if (added > 0 && scrollOffset > 0) {
+      setScrollOffset((o) => o + added);
+    }
+    prevLogLenRef.current = log.length;
+  }, [log.length]);
+
+  useInput((input, key) => {
+    // Ctrl+C: interrupt when busy, exit when idle
+    if (key.ctrl && input === "c") {
+      if (busy) handleCommand("stop");
+      else exit();
+      return;
+    }
+
+    // Escape: clear input
+    if (key.escape) {
+      setInputValue("");
+      setSelectedSuggestion(0);
+      return;
+    }
+
+    // Tab: complete suggestion
+    if (key.tab) {
+      if (suggestions.length > 0) {
+        const cmd = suggestions[selectedSuggestion];
+        if (cmd?.kind === "command") {
+          setInputValue(cmd.name + " ");
+          setSelectedSuggestion(0);
+        }
       }
       return;
     }
 
-    const isBS =
-      key.backspace ||
-      key.delete ||
-      char === "\b" ||
-      char === "\x7f" ||
-      (key.ctrl && char?.toLowerCase() === "h");
-
-    if (isBS) {
-      setInput((p) => p.slice(0, -1));
+    // Arrow keys: navigate suggestions or scroll
+    if (key.upArrow) {
+      if (suggestions.length > 0) {
+        setSelectedSuggestion((i) => (i === 0 ? suggestions.length - 1 : i - 1));
+      } else {
+        setScrollOffset((o) => o + 1);
+      }
+      return;
+    }
+    if (key.downArrow) {
+      if (suggestions.length > 0) {
+        setSelectedSuggestion((i) => (i === suggestions.length - 1 ? 0 : i + 1));
+      } else {
+        setScrollOffset((o) => Math.max(0, o - 1));
+      }
       return;
     }
 
-    if (busy) return;
-
+    // Enter: select suggestion or submit
     if (key.return) {
-      const raw = input.trim();
-      if (!raw) return;
-
-      if (raw === "/resume") {
-        const nextSessions = listSavedChats();
-        setSessions(nextSessions);
-        setSelectedIndex(0);
-        setResumeOpen(true);
-        setInput("");
+      if (suggestions.length > 0) {
+        const cmd = suggestions[selectedSuggestion];
+        if (cmd) {
+          if (cmd.kind === "session" && cmd.chatId) {
+            resume(cmd.chatId);
+          } else {
+            const [cmdName, ...rest] = cmd.name.trim().split(" ");
+            handleCommand(cmdName ?? "", rest.join(" "));
+          }
+          setInputValue("");
+          setSelectedSuggestion(0);
+        }
         return;
       }
-
-      if (raw === "/help") {
-        setHelpOpen((v) => !v);
-        setInput("");
-        return;
+      const trimmed = inputValue.trim();
+      if (!trimmed || busy) return;
+      if (trimmed.startsWith("/")) {
+        const [cmdName, ...rest] = trimmed.slice(1).split(" ");
+        handleCommand(cmdName ?? "", rest.join(" "));
+      } else {
+        submit(trimmed);
       }
-
-      setInput("");
-      submit(raw);
+      setInputValue("");
       return;
     }
 
-    if (char && !key.ctrl && !key.meta) setInput((p) => p + char);
+    // Backspace / delete
+    if (key.backspace || key.delete || (key.ctrl && input?.toLowerCase() === "h")) {
+      setInputValue((v) => v.slice(0, -1));
+      setSelectedSuggestion(0);
+      return;
+    }
+
+    // q to quit when input is empty
+    if (!inputValue && input === "q") { exit(); return; }
+
+    // Regular character
+    if (input && !key.ctrl && !key.meta) {
+      setInputValue((v) => v + input);
+      setSelectedSuggestion(0);
+    }
   });
 
   return (
-    <Box flexDirection="column" width="100%" height="100%">
-      <Header chatId={chatId} />
-      <MessageList
-        messages={messages}
-        streamingText={streamingText}
-        streamingAgent={streamingAgent}
-      />
-      <ActivityPanel
-        activity={activity}
-        currentAgent={currentAgent}
-        thinkingSnippet={thinkingSnippet}
-      />
-      {helpOpen && !resumeOpen && <HelpPanel />}
-      {resumeOpen && (
-        <ResumePicker sessions={sessions} selectedIndex={selectedIndex} />
-      )}
-      <InputBar value={input} busy={busy} currentAgent={currentAgent} />
+    <Box flexDirection="column" width={termWidth} height={termHeight}>
+      <Box flexDirection="row" flexGrow={1}>
+        <Sidebar width={SIDEBAR_WIDTH} tasks={tasks} files={files} />
+
+        <Box
+          flexDirection="column"
+          width={mainWidth}
+          borderStyle="single"
+          borderColor="gray"
+          borderLeft={false}
+        >
+          {/* Scroll hint bar */}
+          <Box
+            borderStyle="classic"
+            borderBottom
+            borderTop={false}
+            borderLeft={false}
+            borderRight={false}
+            borderColor="gray"
+            paddingX={1}
+            justifyContent="flex-end"
+          >
+            <Text color="gray">
+              {scrollOffset > 0 ? "↓ back to bottom" : "↑↓ scroll"}
+            </Text>
+          </Box>
+
+          {/* Agent log */}
+          <Box flexGrow={1} flexDirection="column" justifyContent="flex-start">
+            <AgentLog
+              entries={log}
+              contentWidth={mainWidth}
+              height={logHeight}
+              scrollOffset={scrollOffset}
+            />
+          </Box>
+
+          {/* Status bar + input */}
+          <StatusBar
+            stats={stats}
+            inputValue={inputValue}
+            inputBusy={busy}
+            suggestions={suggestions}
+            selectedSuggestionIdx={selectedSuggestion}
+          />
+        </Box>
+      </Box>
     </Box>
   );
 }
