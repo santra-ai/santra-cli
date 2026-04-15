@@ -16,9 +16,19 @@ export interface FileEntry {
   depth: number;
 }
 
-type LogLevel = "info" | "tool" | "ok" | "error" | "think" | "diff";
+type LogLevel =
+  | "user"      // orange user prompt
+  | "section"   // bold section header with spinner
+  | "bullet"    // indented tool-call result line
+  | "info"      // system message
+  | "ok"        // success
+  | "error"     // error
+  | "think"     // reasoning block
+  | "diff"      // inline diff view (auto-accepted)
+  | "stream"    // live-streaming text (updated in place)
+  | "response"; // finalized agent response
 
-interface DiffLine {
+export interface DiffLine {
   type: "add" | "remove" | "context";
   lineNo: number;
   content: string;
@@ -36,6 +46,10 @@ export interface LogEntry {
   message: string;
   detail?: string;
   diff?: DiffEntry;
+  /** bullet: true once the tool call completed */
+  done?: boolean;
+  /** section: true once the agent phase is done */
+  finished?: boolean;
 }
 
 export interface AgentStats {
@@ -44,6 +58,7 @@ export interface AgentStats {
   steps: number;
   totalSteps: number;
   elapsed: number; // seconds
+  toolCalls: number;
 }
 
 export interface ShellState {

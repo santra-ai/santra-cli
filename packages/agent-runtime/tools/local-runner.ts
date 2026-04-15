@@ -1,5 +1,5 @@
 import type { ToolCallRequest, ToolCallResult } from "@santra/shared";
-import { readdir, readFile, writeFile, mkdir } from "node:fs/promises";
+import { readdir, readFile, writeFile, mkdir, stat } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { join, dirname, resolve } from "node:path";
 
@@ -13,6 +13,10 @@ async function handleReadFile(p: Record<string, unknown>): Promise<string> {
   if (!path) throw new Error("read_file: 'path' is required");
   const abs = resolve(process.cwd(), path);
   if (!existsSync(abs)) throw new Error(`read_file: not found: ${path}`);
+  const info = await stat(abs);
+  if (info.isDirectory()) {
+    throw new Error(`read_file: '${path}' is a directory — use list_directory to list its contents.`);
+  }
   const raw = await readFile(abs, "utf-8");
   const truncated = raw.length > MAX_READ_BYTES;
   const content = truncated ? raw.slice(0, MAX_READ_BYTES) : raw;

@@ -54,10 +54,18 @@ export class NvidiaNIM {
       }),
     });
 
-    if (!response.ok)
+    if (!response.ok) {
+      let detail = "";
+      try {
+        const errBody = await response.json() as { detail?: string; message?: string; error?: string };
+        detail = errBody.detail ?? errBody.message ?? errBody.error ?? "";
+      } catch {
+        detail = await response.text().catch(() => "");
+      }
       throw new Error(
-        `NIM request failed: ${response.status} ${response.statusText}`,
+        `NIM request failed: ${response.status} ${response.statusText}${detail ? ` — ${detail}` : ""}`,
       );
+    }
     if (!response.body) throw new Error("NIM response body is empty.");
 
     const reader = response.body.getReader();

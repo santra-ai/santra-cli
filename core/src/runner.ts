@@ -18,19 +18,8 @@ export class Runner {
 
   private shouldUseSwarm(prompt: string, override?: boolean): boolean {
     if (override !== undefined) return override;
-
-    const trimmed = prompt.trim();
-    if (!trimmed) return false;
-
-    const simpleConversation =
-      /^(hi|hello|hey|yo|thanks|thank you|cool|nice|good morning|good evening)[!. ]*$/i.test(
-        trimmed,
-      ) ||
-      /^(who are you|what can you do|help)\??$/i.test(trimmed);
-
-    if (simpleConversation) return false;
-
-    return true;
+    // Orchestrator handles all routing internally (direct/read/write classification)
+    return !!prompt.trim();
   }
 
   // Execute one prompt and normalize the return shape for callers.
@@ -48,6 +37,8 @@ export class Runner {
         endpoint: this.endpoint,
         previousMessages: options.previousMessages,
         onPhase: options.onPhase,
+        abortSignal: options.abortSignal,
+        onFileChangeReview: options.onFileChangeReview,
       });
 
       if (state.error) {
@@ -79,6 +70,8 @@ export class Runner {
       previousMessages: options.previousMessages,
       onDelta: options.onDelta,
       onPhase: options.onPhase,
+      abortSignal: options.abortSignal,
+      onFileChangeReview: options.onFileChangeReview,
     });
   }
 }

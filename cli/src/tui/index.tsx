@@ -1,4 +1,4 @@
 import { render } from "ink";
-import { App } from "./App.tsx";
+import { App } from "./App";
 
 render(<App />);

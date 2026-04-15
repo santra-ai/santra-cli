@@ -39,8 +39,8 @@ export type ThinkingStep = {
 export type AgentId =
   | "orchestrator"
   | "file-picker"
-  | "executor"
-  | "reviewer";
+  | "reader"
+  | "executor";
 
 export type AgentPhase =
   | { type: "thinking"; agentId: AgentId; delta: string }

@@ -11,18 +11,26 @@ import { executeToolCall } from "./tools/local-runner.ts";
 import { sanitizeJsonLiterals } from "./tools/parser.ts";
 import { AGENT_PROMPTS } from "../../agents/index.ts";
 
+import type { FileChangeFeedback } from "./base-agent.ts";
+
 export type SwarmOptions = {
   task: string;
   endpoint: string;
   previousMessages?: Message[];
   onPhase?: (phase: AgentPhase) => void;
+  abortSignal?: AbortSignal;
+  onFileChangeReview?: (
+    callId: string,
+    filePath: string,
+    oldStr: string,
+    newStr: string,
+  ) => Promise<FileChangeFeedback>;
 };
 
 // ─── Orchestrator plan shape ───────────────────────────────────────────────
 
 type OrchestratorPlan = {
-  task_type: "conversation" | "code_task";
-  needs_files: boolean;
+  task_type: "direct" | "read" | "write";
   direct_answer?: string;
 };
 
@@ -41,13 +49,11 @@ function parsePlan(text: string): OrchestratorPlan | null {
   }
 }
 
-function isConversationOnly(plan: OrchestratorPlan | null): boolean {
-  if (!plan) return false;
+function isDirectAnswer(plan: OrchestratorPlan | null): boolean {
   return (
-    plan.task_type === "conversation" &&
+    plan?.task_type === "direct" &&
     typeof plan.direct_answer === "string" &&
-    plan.direct_answer.trim().length > 0 &&
-    plan.needs_files === false
+    plan.direct_answer.trim().length > 0
   );
 }
 
@@ -192,7 +198,7 @@ export class Swarm {
   }
 
   async run(options: SwarmOptions): Promise<SwarmState> {
-    const { task, onPhase } = options;
+    const { task, onPhase, abortSignal, onFileChangeReview } = options;
 
     const phases: AgentPhase[] = [];
     const toolCallResults: SwarmState["toolCallResults"] = [];
@@ -229,11 +235,18 @@ export class Swarm {
       let agentBuffer = "";
       const localToolResults: SwarmState["toolCallResults"] = [];
 
+      // Check abort before running each sub-agent
+      if (abortSignal?.aborted) {
+        return { output: "", toolResults: localToolResults, error: "Aborted by user" };
+      }
+
       const result = await this.agent.run({
         prompt,
         agentId,
         systemPrompt: AGENT_PROMPTS[agentId],
         maxToolIterations: maxIter,
+        abortSignal,
+        onFileChangeReview,
         onDelta: (chunk) => {
           agentBuffer += chunk;
           emit({ type: "delta", agentId, content: chunk });
@@ -272,16 +285,38 @@ export class Swarm {
 
     const plan = parsePlan(orchResult.output);
 
-    // Fast path — pure conversation
-    if (isConversationOnly(plan)) {
+    // ── TIER 1: direct — orchestrator's answer IS the response ─────────────
+    if (isDirectAnswer(plan)) {
       const finalOutput = plan!.direct_answer!;
       emit({ type: "done", finalOutput });
       return { phases, finalOutput, toolCallResults, thinkingSteps };
     }
 
-    // ── 2. File-Picker ─────────────────────────────────────────────────────
-    const filePickerPrompt = `Task: ${task}\n\nStart with list_directory path="." to see the project structure, then read the most relevant files.`;
-    const filePickerResult = await runAgent("file-picker", filePickerPrompt, 12);
+    // Check abort between stages
+    if (abortSignal?.aborted) {
+      return { phases, finalOutput: "", toolCallResults, thinkingSteps, error: "Aborted by user" };
+    }
+
+    // ── TIER 2: read — single reader agent answers directly ─────────────────
+    if (plan?.task_type === "read") {
+      const readerPromptText = `Task: ${task}\n\nStart with list_directory path="." to understand the full project structure. Explore subdirectories. Read all relevant files thoroughly.`;
+      const readerResult = await runAgent("reader", readerPromptText, 24);
+      if (readerResult.error) {
+        return { phases, finalOutput: "", toolCallResults, thinkingSteps, error: `Reader failed: ${readerResult.error}` };
+      }
+      const finalOutput = readerResult.output;
+      emit({ type: "done", finalOutput });
+      return { phases, finalOutput, toolCallResults, thinkingSteps };
+    }
+
+    // Check abort before write pipeline
+    if (abortSignal?.aborted) {
+      return { phases, finalOutput: "", toolCallResults, thinkingSteps, error: "Aborted by user" };
+    }
+
+    // ── TIER 3: write — file-picker → executor ──────────────────────────────
+    const filePickerPromptText = `Task: ${task}\n\nStart with list_directory path="." to understand the full project structure. Explore all relevant subdirectories. Read every file that relates to the task — be thorough.`;
+    const filePickerResult = await runAgent("file-picker", filePickerPromptText, 24);
     if (filePickerResult.error) {
       return { phases, finalOutput: "", toolCallResults, thinkingSteps, error: `File-picker failed: ${filePickerResult.error}` };
     }
@@ -306,88 +341,45 @@ export class Swarm {
       }
     }
 
-    // Build structured context from actual tool results (not the garbled text output)
     const inlinedFiles = buildFileContext(filePickerResult.toolResults);
     const directoryContext = buildDirectoryContext(filePickerResult.toolResults);
-    // Legacy fallback for reviewer read-only path
-    const fileContext = inlinedFiles || (filesRead.length > 0 ? `Files read: ${filesRead.join(", ")}` : "");
 
-    // ── 3. Executor (write tasks only) ─────────────────────────────────────
-    const looksReadOnly =
-      /^(what|how|where|which|why|explain|describe|show|list|find|tell me|what is|what are|who|when)\b/i.test(
-        task.trim(),
-      ) && !/\b(write|create|add|update|fix|refactor|change|modify|delete|remove|implement|generate)\b/i.test(task);
+    // Check abort before executor
+    if (abortSignal?.aborted) {
+      return { phases, finalOutput: "", toolCallResults, thinkingSteps, error: "Aborted by user" };
+    }
 
-    let executorOutput = "";
-    let executorToolResults: SwarmState["toolCallResults"] = [];
+    const executorPromptText = [
+      `Task: ${task}`,
+      directoryContext
+        ? `Project structure:\n${directoryContext}`
+        : "",
+      inlinedFiles
+        ? `File contents (already read — do NOT re-read these):\n\n${inlinedFiles}`
+        : filesRead.length > 0
+          ? `Files identified:\n${filesRead.map((f) => `- ${f}`).join("\n")}`
+          : "Use list_directory and read_file to explore the project before making any changes.",
+      inlinedFiles
+        ? "IMPORTANT: Only access file paths shown in the project structure above. Do not invent paths."
+        : "",
+    ]
+      .filter(Boolean)
+      .join("\n\n");
 
-    if (!looksReadOnly) {
-      const executorPromptText = [
-        `Task: ${task}`,
-        directoryContext
-          ? `Project structure (from directory scan):\n${directoryContext}`
-          : "",
-        inlinedFiles
-          ? `File contents (already read — use these directly, do NOT re-read them):\n\n${inlinedFiles}`
-          : filesRead.length > 0
-            ? `Files identified (read these before making changes):\n${filesRead.map((f) => `- ${f}`).join("\n")}`
-            : "Use list_directory and read_file to explore the project before making any changes.",
-        inlinedFiles
-          ? "IMPORTANT: The files above are the complete relevant context. Do NOT assume or access any file paths not shown in the project structure above."
-          : "",
-      ]
-        .filter(Boolean)
-        .join("\n\n");
+    const execResult = await runAgent("executor", executorPromptText, 20);
+    if (execResult.error) {
+      return { phases, finalOutput: "", toolCallResults, thinkingSteps, error: `Executor failed: ${execResult.error}` };
+    }
 
-      const execResult = await runAgent("executor", executorPromptText, 20);
-      if (execResult.error) {
-        return { phases, finalOutput: "", toolCallResults, thinkingSteps, error: `Executor failed: ${execResult.error}` };
-      }
-      executorOutput = execResult.output;
-      executorToolResults = execResult.toolResults;
-
-      // Recovery: if executor output raw JSON instead of using write_file tool
-      if (getWrittenPaths(executorToolResults).length === 0) {
-        const recovered = extractWritePayload(executorOutput);
-        if (recovered) {
-          const writeResult = await runManualTool("write_file", recovered);
-          executorToolResults = [...executorToolResults, writeResult];
-        }
+    // Recovery: if executor output raw JSON instead of using write_file tool
+    if (getWrittenPaths(execResult.toolResults).length === 0) {
+      const recovered = extractWritePayload(execResult.output);
+      if (recovered) {
+        await runManualTool("write_file", recovered);
       }
     }
 
-    const writtenPaths = getWrittenPaths(executorToolResults);
-
-    // ── 4. Reviewer ────────────────────────────────────────────────────────
-    const reviewerPromptText = looksReadOnly
-      ? [
-          `Task: ${task}`,
-          inlinedFiles ? `File contents:\n\n${inlinedFiles}` : fileContext ? `File context:\n${fileContext}` : "",
-          "Answer the user's question directly and concisely based on the file contents above. Use read_file only if you need a specific file not already shown.",
-        ]
-          .filter(Boolean)
-          .join("\n\n")
-      : [
-          `Task: ${task}`,
-          executorOutput ? `Executor summary:\n${executorOutput}` : "",
-          writtenPaths.length > 0
-            ? `Files written:\n${writtenPaths.map((p) => `- ${p}`).join("\n")}`
-            : "No files were written.",
-          "Write the final user-facing response. Do NOT re-read files.",
-        ]
-          .filter(Boolean)
-          .join("\n\n");
-
-    const reviewerResult = await runAgent(
-      "reviewer",
-      reviewerPromptText,
-      looksReadOnly ? 6 : 2, // read-only tasks may need tool calls; write tasks don't
-    );
-    if (reviewerResult.error) {
-      return { phases, finalOutput: "", toolCallResults, thinkingSteps, error: `Reviewer failed: ${reviewerResult.error}` };
-    }
-
-    const finalOutput = reviewerResult.output;
+    const finalOutput = execResult.output;
     emit({ type: "done", finalOutput });
     return { phases, finalOutput, toolCallResults, thinkingSteps };
   }
