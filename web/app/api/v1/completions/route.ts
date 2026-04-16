@@ -6,6 +6,7 @@ import {
   buildNimMessages,
   createWebStreamFromNimResponse,
   NvidiaNIM,
+  NvidiaNIMError,
 } from "@llms/nvidia-nim";
 
 // Main completion endpoint: validates input, calls NIM, then streams SSE back.
@@ -56,7 +57,13 @@ export async function POST(req: NextRequest): Promise<Response> {
   } catch (err) {
     const message =
       err instanceof Error ? err.message : "Failed to reach Nvidia NIM.";
-    return Response.json({ error: message }, { status: 502 });
+    const status = err instanceof NvidiaNIMError ? err.statusCode : 502;
+    if (status >= 500) console.error("Error calling Nvidia NIM:", message);
+    const extraHeaders: Record<string, string> =
+      err instanceof NvidiaNIMError && err.retryAfterSeconds != null
+        ? { "Retry-After": String(err.retryAfterSeconds) }
+        : {};
+    return Response.json({ error: message }, { status, headers: extraHeaders });
   }
 
   const stream = createWebStreamFromNimResponse(nimDeltaStream);

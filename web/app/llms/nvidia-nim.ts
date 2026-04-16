@@ -4,6 +4,20 @@ import type {
   ChatCompletionRequestBody,
 } from "./types.ts";
 
+// ─── Typed error
+
+export class NvidiaNIMError extends Error {
+  constructor(
+    message: string,
+    public readonly statusCode: number,
+    /** Parsed from the upstream Retry-After header (seconds). */
+    public readonly retryAfterSeconds?: number,
+  ) {
+    super(message);
+    this.name = "NvidiaNIMError";
+  }
+}
+
 // ─── Config
 
 const NVIDIA_DEFAULT_BASE_URL = "https://integrate.api.nvidia.com/v1";
@@ -57,13 +71,24 @@ export class NvidiaNIM {
     if (!response.ok) {
       let detail = "";
       try {
-        const errBody = await response.json() as { detail?: string; message?: string; error?: string };
+        const errBody = (await response.json()) as {
+          detail?: string;
+          message?: string;
+          error?: string;
+        };
         detail = errBody.detail ?? errBody.message ?? errBody.error ?? "";
       } catch {
         detail = await response.text().catch(() => "");
       }
-      throw new Error(
+      const retryAfterRaw = response.headers.get("Retry-After");
+      const retryAfterSeconds =
+        retryAfterRaw != null && /^\d+$/.test(retryAfterRaw.trim())
+          ? Number(retryAfterRaw)
+          : undefined;
+      throw new NvidiaNIMError(
         `NIM request failed: ${response.status} ${response.statusText}${detail ? ` — ${detail}` : ""}`,
+        response.status,
+        retryAfterSeconds,
       );
     }
     if (!response.body) throw new Error("NIM response body is empty.");
