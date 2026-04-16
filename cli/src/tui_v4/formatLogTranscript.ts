@@ -38,6 +38,14 @@ function makeRow(
   return { key, before, indicator, after };
 }
 
+function makeSpacerRow(key: string): TranscriptRow {
+  return {
+    key,
+    before: [seg(BLANK_TIMESTAMP, "muted")],
+    after: [seg(" ")],
+  };
+}
+
 function spinnerIndicator(color: string): TranscriptIndicator {
   return { kind: "spinner", color };
 }
@@ -51,10 +59,53 @@ function iconIndicator(
 }
 
 // ---------------------------------------------------------------------------
-// Inline markdown: **bold** and `code`
+// Inline markdown and token highlighting
 // ---------------------------------------------------------------------------
 
-function parseInline(text: string): TranscriptSegment[] {
+const SPECIAL_TOKEN_PATTERN =
+  /(?:\.{0,2}\/)?(?:[\w@-]+\/)+[\w@./-]+(?::\d+)?|\/[a-z][\w-]*\b|\b[\w@.-]+\.(?:ts|tsx|js|jsx|mjs|cjs|json|md|mdx|py|go|rs|java|kt|swift|css|scss|html|xml|ya?ml|toml|sh|zsh|txt)\b(?::\d+)?/g;
+
+function pushHighlightedText(
+  segments: TranscriptSegment[],
+  text: string,
+  tone: TranscriptSegment["tone"] = "default",
+  opts?: Pick<TranscriptSegment, "bold" | "dim" | "italic">,
+): void {
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+
+  for (SPECIAL_TOKEN_PATTERN.lastIndex = 0; (match = SPECIAL_TOKEN_PATTERN.exec(text)) !== null;) {
+    if (match.index > lastIndex) {
+      segments.push(seg(text.slice(lastIndex, match.index), tone, opts));
+    }
+
+    const token = match[0] ?? "";
+    const tokenTone: TranscriptSegment["tone"] =
+      token.startsWith("/") && !token.slice(1).includes("/")
+        ? "command"
+        : "file";
+
+    segments.push(
+      seg(token, tokenTone, {
+        bold: opts?.bold,
+        italic: opts?.italic,
+      }),
+    );
+
+    lastIndex = match.index + token.length;
+  }
+
+  if (lastIndex < text.length) {
+    segments.push(seg(text.slice(lastIndex), tone, opts));
+  }
+}
+
+function parseInline(
+  text: string,
+  tone: TranscriptSegment["tone"] = "default",
+  opts?: Pick<TranscriptSegment, "bold" | "dim" | "italic">,
+  highlightTokens = true,
+): TranscriptSegment[] {
   const segments: TranscriptSegment[] = [];
   const pattern = /(\*\*(.+?)\*\*|`([^`]+)`)/g;
   let lastIndex = 0;
@@ -62,21 +113,34 @@ function parseInline(text: string): TranscriptSegment[] {
 
   while ((match = pattern.exec(text)) !== null) {
     if (match.index > lastIndex) {
-      segments.push(seg(text.slice(lastIndex, match.index)));
+      if (highlightTokens) {
+        pushHighlightedText(segments, text.slice(lastIndex, match.index), tone, opts);
+      } else {
+        segments.push(seg(text.slice(lastIndex, match.index), tone, opts));
+      }
     }
     if (match[0].startsWith("**")) {
-      segments.push(seg(match[2] ?? "", "default", { bold: true }));
+      const boldOpts = { ...opts, bold: true };
+      if (highlightTokens) {
+        pushHighlightedText(segments, match[2] ?? "", tone, boldOpts);
+      } else {
+        segments.push(seg(match[2] ?? "", tone, boldOpts));
+      }
     } else {
-      segments.push(seg(match[3] ?? "", "code"));
+      segments.push(seg(match[3] ?? "", "code", { bold: opts?.bold }));
     }
     lastIndex = match.index + match[0].length;
   }
 
   if (lastIndex < text.length) {
-    segments.push(seg(text.slice(lastIndex)));
+    if (highlightTokens) {
+      pushHighlightedText(segments, text.slice(lastIndex), tone, opts);
+    } else {
+      segments.push(seg(text.slice(lastIndex), tone, opts));
+    }
   }
 
-  return segments.length > 0 ? segments : [seg(text)];
+  return segments.length > 0 ? segments : [seg(text, tone, opts)];
 }
 
 // ---------------------------------------------------------------------------
@@ -115,7 +179,14 @@ function wrapText(text: string, maxWidth: number): string[] {
 
 function renderMarkdownLine(line: string): TranscriptSegment[] {
   const headingMatch = /^(#{1,3})\s+(.+)$/.exec(line);
-  if (headingMatch) return [seg(headingMatch[2] ?? "", "default", { bold: true })];
+  if (headingMatch) {
+    const level = headingMatch[1]?.length ?? 1;
+    const marker = level === 1 ? "◆ " : level === 2 ? "◇ " : "• ";
+    return [
+      seg(marker, "heading", { bold: true }),
+      ...parseInline(headingMatch[2] ?? "", "heading", { bold: true }),
+    ];
+  }
 
   const bulletMatch = /^[•\-\*]\s+(.+)$/.exec(line);
   if (bulletMatch) return [seg("• ", "muted"), ...parseInline(bulletMatch[1] ?? "")];
@@ -152,9 +223,9 @@ function renderUser(entry: LogEntry, width: number): TranscriptRow[] {
       ? makeRow(
           `${entry.id}:0`,
           [seg(entry.time, "muted"), seg("  › ", "accent")],
-          parseInline(line).map((s) => ({ ...s, bold: true })),
+          parseInline(line, "default", undefined, false).map((s) => ({ ...s, bold: true })),
         )
-      : makeRow(`${entry.id}:${i}`, CONTINUATION_BEFORE, parseInline(line).map((s) => ({ ...s, bold: true }))),
+      : makeRow(`${entry.id}:${i}`, CONTINUATION_BEFORE, parseInline(line, "default", undefined, false).map((s) => ({ ...s, bold: true }))),
   );
 }
 
@@ -168,7 +239,10 @@ function renderSection(entry: LogEntry, _width: number): TranscriptRow[] {
     makeRow(
       entry.id,
       [seg(entry.time, "muted"), seg("  ", "muted")],
-      [seg(" ", "muted"), seg(entry.message, active ? "default" : "muted", { bold: active })],
+      [
+        seg(" ", "muted"),
+        ...parseInline(entry.message, active ? "heading" : "muted", { bold: active }, false),
+      ],
       indicator,
     ),
   ];
@@ -185,7 +259,7 @@ function renderBullet(entry: LogEntry, width: number): TranscriptRow[] {
     makeRow(
       `${entry.id}:title`,
       [seg(entry.time, "muted"), seg("  ", "muted")],
-      [seg(" ", "muted"), seg(entry.message, tone)],
+      [seg(" ", "muted"), ...parseInline(entry.message, tone, undefined, false)],
       indicator,
     ),
   ];
@@ -199,7 +273,7 @@ function renderBullet(entry: LogEntry, width: number): TranscriptRow[] {
         makeRow(
           `${entry.id}:detail:${i}`,
           [seg(BLANK_TIMESTAMP, "muted"), seg("  ⎿  ", "muted", { dim: true })],
-          [seg(detailLines[i] ?? "", "muted", { dim: true })],
+          parseInline(detailLines[i] ?? "", "muted", { dim: true }, false),
         ),
       );
     }
@@ -223,10 +297,10 @@ function renderSimple(
       ? makeRow(
           `${entry.id}:${i}`,
           [seg(entry.time, "muted"), seg("  ", "muted")],
-          [seg(" ", "muted"), seg(line, msgTone)],
+          [seg(" ", "muted"), ...parseInline(line, msgTone, undefined, false)],
           iconIndicator(iconChar, iconColor),
         )
-      : makeRow(`${entry.id}:${i}`, CONTINUATION_BEFORE, [seg(line, msgTone)]),
+      : makeRow(`${entry.id}:${i}`, CONTINUATION_BEFORE, parseInline(line, msgTone, undefined, false)),
   );
 }
 
@@ -254,7 +328,7 @@ function renderThink(entry: LogEntry, width: number): TranscriptRow[] {
       makeRow(
         `${entry.id}:line:${i}`,
         [seg(BLANK_TIMESTAMP, "muted"), seg("  │  ", "muted", { dim: true })],
-        [seg(contentLines[i] ?? "", "muted", { dim: true })],
+        parseInline(contentLines[i] ?? "", "muted", { dim: true }, false),
       ),
     );
   }
@@ -277,15 +351,22 @@ function renderDiff(entry: LogEntry, width: number): TranscriptRow[] {
   const rows: TranscriptRow[] = [];
 
   // Header row: △ file +N -N
-  const headerText = diff
-    ? ` ${diff.file}  +${diff.added} -${diff.removed}`
-    : ` ${entry.message}`;
+  const headerSegments = diff
+    ? [
+        seg(" ", "muted"),
+        seg(diff.file, "file"),
+        seg("  ", "muted"),
+        seg(`+${diff.added}`, "success"),
+        seg(" ", "muted"),
+        seg(`-${diff.removed}`, "danger"),
+      ]
+    : [seg(" ", "muted"), ...parseInline(entry.message, "muted", undefined, false)];
 
   rows.push(
     makeRow(
       `${entry.id}:header`,
       [seg(entry.time, "muted"), seg("  △ ", "muted")],
-      [seg(headerText, "muted")],
+      headerSegments,
     ),
   );
 
@@ -440,56 +521,31 @@ function renderResponse(entry: LogEntry, width: number): TranscriptRow[] {
 // Rolling-window bullet filter
 //
 // Rules:
-//   • Bullets that belong to a FINISHED section are hidden entirely —
-//     the ✓ section header alone gives enough context.
-//   • Bullets that belong to an ACTIVE (unfinished) section are shown,
-//     but capped at the last MAX_VISIBLE_BULLETS entries globally.
-//   • Orphan bullets (before the first section, e.g. single-agent mode)
-//     also respect the cap.
+//   • Keep a simple rolling window of the last N bullet rows globally.
+//   • New steps appear at the bottom.
+//   • Older steps fall off from the top one-by-one as new ones arrive.
 //
-// This keeps exactly the most-recent N tool calls on screen at all times,
-// replacing older ones as new ones arrive — the same behaviour as OpenCode.
+// This avoids whole groups disappearing at once when a section finishes and
+// makes the progression feel continuous in the terminal.
 // ---------------------------------------------------------------------------
 
-const MAX_VISIBLE_BULLETS = 5;
+const MAX_VISIBLE_BULLETS = 3;
+const MAX_VISIBLE_SECTIONS = 3;
 
 function computeVisibleBulletIds(log: LogEntry[]): Set<string> {
-  type Group = { finished: boolean; bulletIds: string[] };
-  const groups: Group[] = [];
-  let current: Group | null = null;
-  const orphans: string[] = [];
+  const bulletIds = log
+    .filter((entry) => entry.level === "bullet")
+    .map((entry) => entry.id);
 
-  for (const entry of log) {
-    if (entry.level === "section") {
-      // finished flag reflects current state from deriveLog
-      current = { finished: entry.finished ?? false, bulletIds: [] };
-      groups.push(current);
-    } else if (entry.level === "bullet") {
-      if (current !== null) {
-        current.bulletIds.push(entry.id);
-      } else {
-        orphans.push(entry.id);
-      }
-    }
-  }
+  return new Set(bulletIds.slice(-MAX_VISIBLE_BULLETS));
+}
 
-  const visible = new Set<string>();
+function computeVisibleSectionIds(log: LogEntry[]): Set<string> {
+  const sections = log
+    .filter((entry) => entry.level === "section")
+    .map((entry) => entry.id);
 
-  // Orphan bullets (single-agent / no section): last MAX_VISIBLE_BULLETS
-  for (const id of orphans.slice(-MAX_VISIBLE_BULLETS)) visible.add(id);
-
-  for (const group of groups) {
-    if (group.finished) {
-      // Section complete — bullets are no longer needed in the viewport
-      continue;
-    }
-    // Active section — rolling window of the last MAX_VISIBLE_BULLETS
-    for (const id of group.bulletIds.slice(-MAX_VISIBLE_BULLETS)) {
-      visible.add(id);
-    }
-  }
-
-  return visible;
+  return new Set(sections.slice(-MAX_VISIBLE_SECTIONS));
 }
 
 // ---------------------------------------------------------------------------
@@ -501,48 +557,81 @@ export function formatLogTranscriptRows(
   width: number,
 ): TranscriptRow[] {
   const visibleBullets = computeVisibleBulletIds(log);
+  const visibleSections = computeVisibleSectionIds(log);
   const rows: TranscriptRow[] = [];
+  let renderedEntryCount = 0;
+  let previousRenderedLevel: LogEntry["level"] | null = null;
+
+  const maybeAddGap = (entry: LogEntry) => {
+    if (renderedEntryCount === 0) return;
+
+    const needsGap =
+      entry.level === "section" ||
+      entry.level === "response" ||
+      entry.level === "error" ||
+      entry.level === "diff";
+
+    const previousWasTransition =
+      previousRenderedLevel === "section" ||
+      previousRenderedLevel === "response" ||
+      previousRenderedLevel === "error" ||
+      previousRenderedLevel === "diff";
+
+    if (needsGap && !previousWasTransition) {
+      rows.push(makeSpacerRow(`${entry.id}:gap-before`));
+    }
+  };
+
+  const pushRendered = (entry: LogEntry, renderedRows: TranscriptRow[]) => {
+    if (renderedRows.length === 0) return;
+    maybeAddGap(entry);
+    rows.push(...renderedRows);
+    renderedEntryCount += 1;
+    previousRenderedLevel = entry.level;
+  };
 
   for (const entry of log) {
     switch (entry.level) {
       case "user":
-        rows.push(...renderUser(entry, width));
+        pushRendered(entry, renderUser(entry, width));
         break;
 
       case "section":
-        rows.push(...renderSection(entry, width));
+        if (visibleSections.has(entry.id)) {
+          pushRendered(entry, renderSection(entry, width));
+        }
         break;
 
       case "bullet":
         // Only render bullets that survived the rolling-window filter
         if (visibleBullets.has(entry.id)) {
-          rows.push(...renderBullet(entry, width));
+          pushRendered(entry, renderBullet(entry, width));
         }
         break;
 
       case "info":
-        rows.push(...renderSimple(entry, "ℹ", "gray", "muted", width));
+        pushRendered(entry, renderSimple(entry, "ℹ", "gray", "muted", width));
         break;
 
       case "ok":
-        rows.push(...renderSimple(entry, "✓", "green", "default", width));
+        pushRendered(entry, renderSimple(entry, "✓", "green", "default", width));
         break;
 
       case "error":
-        rows.push(...renderSimple(entry, "✗", "red", "danger", width));
+        pushRendered(entry, renderSimple(entry, "✗", "red", "danger", width));
         break;
 
       case "think":
-        rows.push(...renderThink(entry, width));
+        pushRendered(entry, renderThink(entry, width));
         break;
 
       case "diff":
-        rows.push(...renderDiff(entry, width));
+        pushRendered(entry, renderDiff(entry, width));
         break;
 
       case "stream":
       case "response":
-        rows.push(...renderResponse(entry, width));
+        pushRendered(entry, renderResponse(entry, width));
         break;
     }
   }

@@ -5,13 +5,13 @@ import useAgent from "../tui/hooks/useAgent";
 import type { LogEntry } from "../tui/types/index.ts";
 import { Composer } from "../tui_v3/components/Composer";
 import { TranscriptView } from "../tui_v3/components/TranscriptView";
-import { parseTerminalMouseActions, sanitizeComposerInput } from "../tui_v3/input";
+import { sanitizeComposerInput } from "../tui_v3/input";
 import { ChromeBar } from "./components/ChromeBar";
 import { formatLogTranscriptRows } from "./formatLogTranscript";
+import { formatTranscriptStatusRows, STATUS_TIPS } from "./formatTranscriptStatusRows";
 
-const MOUSE_WHEEL_SCROLL_LINES = 3;
-const MOUSE_PACKET_SUPPRESSION_MS = 48;
 const PLACEHOLDER = "Ask the agent anything… (/ for commands)";
+const TIP_ROTATION_MS = 3200;
 
 export function App() {
   const { exit } = useApp();
@@ -34,6 +34,7 @@ export function App() {
   // ─── Agent runtime ────────────────────────────────────────────────────────
   const {
     log,
+    tasks,
     stats,
     busy,
     savedChats,
@@ -68,10 +69,11 @@ export function App() {
             : [];
           return [...prev, ...sep, ...finished];
         });
+        clearLog();
       }
     }
     prevBusyRef.current = busy;
-  }, [busy]);
+  }, [busy, clearLog]);
 
   // Clear both cumulative and current agent log
   const clearAll = useCallback(() => {
@@ -93,13 +95,14 @@ export function App() {
 
   // Active display: cumulative runs + current run (if in progress)
   const displayLog = useMemo(
-    () => (busy ? [...cumulativeLog, ...log] : cumulativeLog),
-    [busy, cumulativeLog, log],
+    () => [...cumulativeLog, ...log],
+    [cumulativeLog, log],
   );
 
   // ─── Input state ──────────────────────────────────────────────────────────
   const [inputValue, setInputValue] = useState("");
   const [selectedSuggestion, setSelectedSuggestion] = useState(0);
+  const [tipIndex, setTipIndex] = useState(0);
 
   const suggestions = useMemo(
     () => getSlashSuggestions(inputValue, savedChats),
@@ -112,6 +115,16 @@ export function App() {
     );
   }, [suggestions]);
 
+  useEffect(() => {
+    const rotation = setInterval(() => {
+      setTipIndex((current) => (current + 1) % STATUS_TIPS.length);
+    }, TIP_ROTATION_MS);
+
+    return () => {
+      clearInterval(rotation);
+    };
+  }, []);
+
   const resetComposer = () => {
     setInputValue("");
     setSelectedSuggestion(0);
@@ -119,8 +132,21 @@ export function App() {
 
   // ─── Transcript rows ──────────────────────────────────────────────────────
   const transcriptRows = useMemo(
-    () => formatLogTranscriptRows(displayLog, Math.max(48, termWidth - 2)),
-    [displayLog, termWidth],
+    () => {
+      const width = Math.max(48, termWidth - 2);
+      return [
+        ...formatLogTranscriptRows(displayLog, width),
+        ...formatTranscriptStatusRows({
+          busy,
+          inputValue,
+          log,
+          tasks,
+          tipIndex,
+          width,
+        }),
+      ];
+    },
+    [busy, displayLog, inputValue, log, tasks, termWidth, tipIndex],
   );
 
   // ─── Scroll state ─────────────────────────────────────────────────────────
@@ -148,47 +174,6 @@ export function App() {
     setScrollOffset((c) => Math.min(c, maxScrollOffset));
   }, [maxScrollOffset]);
 
-  // ─── Mouse reporting + scroll ─────────────────────────────────────────────
-  const suppressNextInkInputRef = useRef(false);
-  const suppressTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  useEffect(() => {
-    process.stdout.write("\x1b[?1000h\x1b[?1002h\x1b[?1006h");
-
-    const onData = (buf: Buffer) => {
-      const payload = buf.toString("binary");
-      const mouseActions = parseTerminalMouseActions(payload);
-      if (mouseActions.length === 0) return;
-
-      // Suppress Ink input for 48 ms so mouse bytes never reach the input field
-      suppressNextInkInputRef.current = true;
-      if (suppressTimeoutRef.current) clearTimeout(suppressTimeoutRef.current);
-      suppressTimeoutRef.current = setTimeout(() => {
-        suppressNextInkInputRef.current = false;
-        suppressTimeoutRef.current = null;
-      }, MOUSE_PACKET_SUPPRESSION_MS);
-
-      for (const action of mouseActions) {
-        if (action === "scroll-up") {
-          setScrollOffset((c) => Math.min(maxScrollOffset, c + MOUSE_WHEEL_SCROLL_LINES));
-        } else if (action === "scroll-down") {
-          setScrollOffset((c) => Math.max(0, c - MOUSE_WHEEL_SCROLL_LINES));
-        }
-      }
-    };
-
-    process.stdin.on("data", onData);
-    return () => {
-      if (suppressTimeoutRef.current) {
-        clearTimeout(suppressTimeoutRef.current);
-        suppressTimeoutRef.current = null;
-      }
-      suppressNextInkInputRef.current = false;
-      process.stdout.write("\x1b[?1000l\x1b[?1002l\x1b[?1006l");
-      process.stdin.off("data", onData);
-    };
-  }, [maxScrollOffset]);
-
   // ─── Suggestion execution ─────────────────────────────────────────────────
   const executeSuggestion = useCallback(() => {
     const selected = suggestions[selectedSuggestion];
@@ -206,7 +191,7 @@ export function App() {
   }, [suggestions, selectedSuggestion, resume, handleCommandV4]);
 
   // ─── Keyboard handler ─────────────────────────────────────────────────────
-  const canKeyboardScroll = !busy && !inputValue && suggestions.length === 0;
+  const canKeyboardScroll = suggestions.length === 0;
 
   useInput((input, key) => {
     if (key.ctrl && input === "c") {
@@ -279,9 +264,6 @@ export function App() {
       return;
     }
 
-    // Block anything caused by mouse events leaking into Ink
-    if (suppressNextInkInputRef.current) return;
-
     // Enter — submit or execute suggestion
     if (key.return || input === "\r" || input === "\n") {
       if (suggestions.length > 0) {
@@ -303,7 +285,13 @@ export function App() {
 
     if (busy) return;
 
-    if (key.backspace || (key.ctrl && input?.toLowerCase() === "h")) {
+    if (
+      key.backspace ||
+      key.delete ||
+      input === "\u007f" ||
+      input === "\b" ||
+      (key.ctrl && input?.toLowerCase() === "h")
+    ) {
       setInputValue((c) => c.slice(0, -1));
       setSelectedSuggestion(0);
       return;

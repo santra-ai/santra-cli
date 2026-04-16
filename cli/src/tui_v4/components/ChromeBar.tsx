@@ -6,11 +6,20 @@ interface ChromeBarProps {
   hiddenRowsAbove: number;
 }
 
-export function ChromeBar({ width: _width, scrollOffset, hiddenRowsAbove }: ChromeBarProps) {
-  const label = "TE UI v4  •  Live Agent Runtime";
-  const hint = "Enter submit  •  / commands  •  wheel or ↑↓ scroll  •  Ctrl+C exit";
+function truncate(text: string, maxWidth: number): string {
+  if (maxWidth <= 0) return "";
+  if (text.length <= maxWidth) return text;
+  if (maxWidth === 1) return "…";
+  return `${text.slice(0, maxWidth - 1)}…`;
+}
+
+export function ChromeBar({ width, scrollOffset, hiddenRowsAbove }: ChromeBarProps) {
+  const label = "Santra CLI  •  Agent Session";
+  const hint = "Enter send  •  / commands  •  ↑↓ / PgUp / PgDn scroll  •  Esc stop  •  Ctrl+C exit";
   const scrollState =
-    scrollOffset > 0 ? `↑ ${hiddenRowsAbove} older lines` : "Following latest";
+    scrollOffset > 0 ? `↑ ${hiddenRowsAbove} earlier lines` : "Following live output";
+  const labelText = truncate(label, Math.max(18, Math.floor(width * 0.32)));
+  const hintText = truncate(hint, Math.max(18, width - 4));
 
   return (
     <Box
@@ -24,18 +33,18 @@ export function ChromeBar({ width: _width, scrollOffset, hiddenRowsAbove }: Chro
     >
       <Box paddingX={1}>
         <Box flexGrow={1}>
-          <Text color="red">●</Text>
-          <Text color="yellow"> ●</Text>
-          <Text color="green"> ●</Text>
-          <Text color="gray">  ~/santra-cli</Text>
+          <Text color="#b0b0b0">●</Text>
+          <Text color="#b0b0b0"> ●</Text>
+          <Text color="#b0b0b0"> ●</Text>
+          <Text color="#b0b0b0">  ~/santra-cli</Text>
         </Box>
-        <Text color={scrollOffset > 0 ? "yellow" : "gray"}>{scrollState}</Text>
-        <Text color="gray">  </Text>
-        <Text color="white" bold>{label}</Text>
+        <Text color="#b0b0b0">{truncate(scrollState, Math.max(14, Math.floor(width * 0.24)))}</Text>
+        <Text color="#b0b0b0">  </Text>
+        <Text color="white" bold>{labelText}</Text>
       </Box>
       <Box paddingX={1}>
-        <Text color="gray" dimColor>
-          {hint}
+        <Text color="#b0b0b0" dimColor>
+          {hintText}
         </Text>
       </Box>
     </Box>

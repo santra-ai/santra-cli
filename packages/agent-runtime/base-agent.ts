@@ -114,6 +114,7 @@ function extractJsonObjects(text: string): string[] {
 function recoverToolCallFromText(
   text: string,
   agentId: AgentId,
+  recoveredId: string,
 ): ToolCallRequest | null {
   if (!["file-picker", "reader", "executor"].includes(agentId)) {
     return null;
@@ -171,7 +172,7 @@ function recoverToolCallFromText(
     if (!name) continue;
 
     return {
-      id: "tc_recovered",
+      id: recoveredId,
       name,
       parameters: parsed,
     };
@@ -363,6 +364,7 @@ export class BaseAgent {
     const allToolResults: ToolCallResult[] = [];
     const allThinking: ThinkingStep[] = [];
     let finalText = "";
+    let toolCallCounter = 0;
 
     // Cache original file content for write_file reverts: callId → originalContent
     const originalFileContent = new Map<string, string>();
@@ -423,14 +425,22 @@ export class BaseAgent {
           allThinking.push(step);
           onPhase?.({ type: "thinking", agentId, delta: chunk.content });
         } else if (chunk.type === "tool_call") {
-          toolCalls.push(chunk.call);
+          toolCallCounter += 1;
+          toolCalls.push({
+            ...chunk.call,
+            id: `tc_${toolCallCounter}`,
+          });
         }
       });
       parser.push(text);
       parser.finish();
 
       if (toolCalls.length === 0) {
-        const recovered = recoverToolCallFromText(text, agentId);
+        const recovered = recoverToolCallFromText(
+          text,
+          agentId,
+          `tc_${++toolCallCounter}`,
+        );
         if (recovered) {
           toolCalls.push(recovered);
         }
