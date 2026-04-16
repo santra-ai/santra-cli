@@ -182,6 +182,22 @@ function recoverToolCallFromText(
 
 // ─── BaseAgent ────────────────────────────────────────────────────────────────
 
+const MAX_429_RETRIES = 3;
+
+function sleepMs(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(resolve, ms);
+    signal?.addEventListener(
+      "abort",
+      () => {
+        clearTimeout(timer);
+        reject(new DOMException("Aborted", "AbortError"));
+      },
+      { once: true },
+    );
+  });
+}
+
 export class BaseAgent {
   private activeEndpoint?: string;
 
@@ -218,7 +234,7 @@ export class BaseAgent {
     messages: Message[],
     onDelta?: (c: string) => void,
     abortSignal?: AbortSignal,
-  ): Promise<{ text: string; error?: string }> {
+  ): Promise<{ text: string; error?: string; retryAfterMs?: number }> {
     const body: CompletionRequest = {
       prompt: messages.at(-1)?.content ?? "",
       messages,
@@ -281,8 +297,14 @@ export class BaseAgent {
         text: "",
         error: lastError ?? "Network error",
       };
-    if (!resp.ok)
-      return { text: "", error: `HTTP ${resp.status}: ${resp.statusText}` };
+    if (!resp.ok) {
+      const retryAfterHeader = resp.headers.get("Retry-After");
+      const retryAfterMs =
+        retryAfterHeader != null && /^\d+$/.test(retryAfterHeader.trim())
+          ? Number(retryAfterHeader) * 1_000
+          : undefined;
+      return { text: "", error: `HTTP ${resp.status}: ${resp.statusText}`, retryAfterMs };
+    }
     if (!resp.body) return { text: "", error: "Empty response body" };
 
     const reader = resp.body.getReader();
@@ -356,7 +378,19 @@ export class BaseAgent {
         };
       }
 
-      const { text, error } = await this.singleTurn(messages, onDelta, abortSignal);
+      let singleTurnResult = await this.singleTurn(messages, onDelta, abortSignal);
+      for (let r = 0; r < MAX_429_RETRIES && singleTurnResult.error?.startsWith("HTTP 429"); r++) {
+        // Respect the upstream Retry-After header; default to 60 s (NIM per-minute limit)
+        const delay = singleTurnResult.retryAfterMs ?? 60_000;
+        try {
+          await sleepMs(delay, abortSignal);
+        } catch {
+          singleTurnResult = { text: "", error: "Aborted" };
+          break;
+        }
+        singleTurnResult = await this.singleTurn(messages, onDelta, abortSignal);
+      }
+      const { text, error } = singleTurnResult;
 
       if (error) {
         const isAbort = error === "Aborted";

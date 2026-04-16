@@ -1,3 +1,4 @@
+import type React from "react";
 import { Box, Text } from "ink";
 import Spinner from "ink-spinner";
 import type { LogEntry } from "../types";
@@ -9,8 +10,88 @@ function Ts({ time }: { time: string }) {
   return <Text color="gray">{time}</Text>;
 }
 
+// ─── Inline segment parser ────────────────────────────────────────────────────
+// Parses **bold** and `code` spans within a single line.
+
+type InlineSeg =
+  | { kind: "text"; content: string }
+  | { kind: "bold"; content: string }
+  | { kind: "code"; content: string };
+
+function parseInline(line: string): InlineSeg[] {
+  const segs: InlineSeg[] = [];
+  let rest = line;
+  while (rest.length > 0) {
+    const bi = rest.indexOf("**");
+    const ci = rest.indexOf("`");
+    const next = Math.min(bi < 0 ? Infinity : bi, ci < 0 ? Infinity : ci);
+    if (!isFinite(next)) { if (rest) segs.push({ kind: "text", content: rest }); break; }
+    if (next > 0) { segs.push({ kind: "text", content: rest.slice(0, next) }); rest = rest.slice(next); }
+    if (rest.startsWith("**")) {
+      const e = rest.indexOf("**", 2);
+      if (e < 0) { segs.push({ kind: "text", content: rest }); break; }
+      segs.push({ kind: "bold", content: rest.slice(2, e) });
+      rest = rest.slice(e + 2);
+    } else {
+      const e = rest.indexOf("`", 1);
+      if (e < 0) { segs.push({ kind: "text", content: rest }); break; }
+      segs.push({ kind: "code", content: rest.slice(1, e) });
+      rest = rest.slice(e + 1);
+    }
+  }
+  return segs;
+}
+
+// Renders inline segments as nested <Text> children (Ink supports this natively).
+function InlineText({ segs, cursor }: { segs: InlineSeg[]; cursor?: React.ReactNode }) {
+  // Fast path: plain text only
+  if (segs.length === 1 && segs[0]?.kind === "text") {
+    return <Text color="white" wrap="wrap">{segs[0].content}{cursor}</Text>;
+  }
+  return (
+    <Text color="white" wrap="wrap">
+      {segs.map((s, i) =>
+        s.kind === "bold" ? <Text key={i} bold>{s.content}</Text> :
+        s.kind === "code" ? <Text key={i} color="cyan">{s.content}</Text> :
+                            s.content
+      )}
+      {cursor}
+    </Text>
+  );
+}
+
+// ─── Line pre-processor ───────────────────────────────────────────────────────
+
+type FmtLine =
+  | { type: "blank" }
+  | { type: "heading"; level: number; text: string }
+  | { type: "bullet"; text: string }
+  | { type: "numbered"; num: string; text: string }
+  | { type: "codeline"; text: string }
+  | { type: "check"; text: string }
+  | { type: "cross"; text: string }
+  | { type: "prose"; text: string };
+
+function preprocessLines(raw: string[]): FmtLine[] {
+  const out: FmtLine[] = [];
+  let inCode = false;
+  for (const line of raw) {
+    if (line.startsWith("```")) { inCode = !inCode; continue; }
+    if (inCode)               { out.push({ type: "codeline", text: line }); continue; }
+    if (!line.trim())         { out.push({ type: "blank" }); continue; }
+    const h = line.match(/^(#{1,3}) (.*)/);
+    if (h)                    { out.push({ type: "heading", level: h[1]!.length, text: h[2]! }); continue; }
+    const n = line.match(/^(\d+)\. (.*)/);
+    if (n)                    { out.push({ type: "numbered", num: n[1]!, text: n[2]! }); continue; }
+    if (/^[•\-\*] /.test(line)) { out.push({ type: "bullet", text: line.replace(/^[•\-\*] /, "") }); continue; }
+    if (line.startsWith("✓")) { out.push({ type: "check", text: line.slice(1).trim() }); continue; }
+    if (line.startsWith("✗")) { out.push({ type: "cross", text: line.slice(1).trim() }); continue; }
+    out.push({ type: "prose", text: line });
+  }
+  return out;
+}
+
 // ─── Formatted text renderer ──────────────────────────────────────────────────
-// Renders plain-text lines with lightweight structure recognition.
 
 interface FormattedTextProps {
   text: string;
@@ -19,65 +100,70 @@ interface FormattedTextProps {
 }
 
 function FormattedText({ text, width, streaming }: FormattedTextProps) {
-  const lines = text.split("\n");
+  const lines = preprocessLines(text.split("\n"));
+  const lastIdx = lines.length - 1;
 
   return (
     <Box flexDirection="column" width={Math.max(1, width)}>
       {lines.map((line, i) => {
-        const isLast = i === lines.length - 1;
+        const isLast = i === lastIdx;
         const cursor = streaming && isLast ? <Text color="green">▌</Text> : null;
 
-        // ## Section header
-        if (/^#{1,3} /.test(line)) {
-          const content = line.replace(/^#{1,3} /, "");
+        if (line.type === "blank")
+          return cursor ? <Box key={i}>{cursor}</Box> : null;
+
+        if (line.type === "heading")
           return (
             <Box key={i} marginTop={i === 0 ? 0 : 1}>
-              <Text color="cyan" bold>{content}</Text>
+              <Text bold color={line.level <= 2 ? "white" : "cyan"}>{line.text}</Text>
               {cursor}
             </Box>
           );
-        }
 
-        // • or - bullet point
-        if (/^[•\-\*] /.test(line)) {
-          const content = line.replace(/^[•\-\*] /, "");
+        if (line.type === "numbered")
           return (
-            <Box key={i} gap={1}>
+            <Box key={i} flexDirection="row" gap={1}>
+              <Text color="gray">{line.num}.</Text>
+              <InlineText segs={parseInline(line.text)} cursor={cursor} />
+            </Box>
+          );
+
+        if (line.type === "bullet")
+          return (
+            <Box key={i} flexDirection="row" gap={1}>
               <Text color="gray">  •</Text>
-              <Text color="white" wrap="wrap">{content}{cursor}</Text>
+              <InlineText segs={parseInline(line.text)} cursor={cursor} />
             </Box>
           );
-        }
 
-        // ✓ success line
-        if (line.startsWith("✓")) {
+        if (line.type === "codeline")
           return (
-            <Box key={i} gap={1}>
+            <Box key={i} paddingLeft={1}>
+              <Text color="cyan">{line.text || " "}</Text>
+              {cursor}
+            </Box>
+          );
+
+        if (line.type === "check")
+          return (
+            <Box key={i} flexDirection="row" gap={1}>
               <Text color="green">✓</Text>
-              <Text color="white" bold wrap="wrap">{line.slice(1).trim()}{cursor}</Text>
+              <Text bold color="white" wrap="wrap">{line.text}{cursor}</Text>
             </Box>
           );
-        }
 
-        // ✗ failure line
-        if (line.startsWith("✗")) {
+        if (line.type === "cross")
           return (
-            <Box key={i} gap={1}>
+            <Box key={i} flexDirection="row" gap={1}>
               <Text color="red">✗</Text>
-              <Text color="red" wrap="wrap">{line.slice(1).trim()}{cursor}</Text>
+              <Text color="red" wrap="wrap">{line.text}{cursor}</Text>
             </Box>
           );
-        }
 
-        // Blank line → skip (cursor shows on last real line)
-        if (!line.trim()) {
-          return cursor ? <Box key={i}>{cursor}</Box> : null;
-        }
-
-        // Normal prose line
+        // prose — full inline parsing
         return (
           <Box key={i}>
-            <Text color="white" wrap="wrap">{line}{cursor}</Text>
+            <InlineText segs={parseInline(line.text)} cursor={cursor} />
           </Box>
         );
       })}
@@ -91,6 +177,7 @@ function UserRow({ entry }: { entry: LogEntry }) {
   return (
     <Box paddingX={1} marginTop={1} gap={2}>
       <Ts time={entry.time} />
+      <Text color="#e07b39">› </Text>
       <Text color="#e07b39" bold>{entry.message}</Text>
     </Box>
   );
@@ -116,22 +203,35 @@ function SectionRow({ entry, isLast }: { entry: LogEntry; isLast: boolean }) {
 
 function BulletRow({ entry, isLast }: { entry: LogEntry; isLast: boolean }) {
   const spinning = !entry.done && isLast;
+
+  // Split "Verb Target — metadata" into parts
+  const dashIdx = entry.message.indexOf(" — ");
+  const main = dashIdx === -1 ? entry.message : entry.message.slice(0, dashIdx);
+  const meta = dashIdx === -1 ? "" : entry.message.slice(dashIdx); // includes " — "
+
+  // Bold the first word (action verb: Read, Write, Search, etc.)
+  const spaceIdx = main.indexOf(" ");
+  const verb = spaceIdx === -1 ? main : main.slice(0, spaceIdx);
+  const rest = spaceIdx === -1 ? "" : main.slice(spaceIdx);
+
   return (
     <Box flexDirection="column">
       <Box paddingX={1} gap={2}>
         <Ts time={entry.time} />
         {spinning
-          ? <Text color="gray"><Spinner type="dots" /></Text>
-          : <Text color="gray">·</Text>
+          ? <Text color="cyan"><Spinner type="dots" /></Text>
+          : <Text color="gray">●</Text>
         }
         <Text color="white" wrap="wrap">
-          {entry.message}
+          <Text bold color={spinning ? "cyan" : "white"}>{verb}</Text>
+          {rest}
+          {meta ? <Text dimColor color="gray">{meta}</Text> : null}
         </Text>
       </Box>
       {entry.done && entry.detail && (
         <Box paddingLeft={9} flexDirection="column">
           {entry.detail.split("\n").map((line, i) => (
-            <Text key={i} color="cyan">{line}</Text>
+            <Text key={i} color="gray" dimColor>{line}</Text>
           ))}
         </Box>
       )}
@@ -147,11 +247,8 @@ function ThinkBlock({ entry, isLast }: { entry: LogEntry; isLast: boolean }) {
     <Box flexDirection="column">
       <Box paddingX={1} gap={2}>
         <Ts time={entry.time} />
-        {live
-          ? <Text color="gray"><Spinner type="dots" /></Text>
-          : <Text color="gray">⟳</Text>
-        }
-        <Text color="gray">{live ? "thinking…" : "thought"}</Text>
+        <Text color="gray">∴</Text>
+        <Text color="gray" dimColor italic>{live ? "thinking…" : "thought"}</Text>
       </Box>
       <Box
         borderStyle="single"
@@ -200,7 +297,7 @@ function ResponseRow({
   contentWidth: number;
 }) {
   const streaming = entry.level === "stream" && isLast;
-  const textWidth = Math.max(1, contentWidth - 9); // 1(paddingX) + 8(ts+gap)
+  const textWidth = Math.max(1, contentWidth - 12); // 1(paddingX) + 8(ts+gap) + 3(⎿ prefix)
 
   return (
     <Box flexDirection="column" marginTop={1}>
@@ -212,13 +309,16 @@ function ResponseRow({
           : <Text color="green">✓</Text>
         }
       </Box>
-      {/* Formatted body indented under the icon */}
-      <Box paddingLeft={9} flexDirection="column">
-        <FormattedText
-          text={entry.message}
-          width={textWidth}
-          streaming={streaming}
-        />
+      {/* Formatted body with ⎿ prefix indicator */}
+      <Box paddingLeft={9} flexDirection="row">
+        <Text dimColor>{"⎿  "}</Text>
+        <Box flexDirection="column" flexGrow={1}>
+          <FormattedText
+            text={entry.message}
+            width={textWidth}
+            streaming={streaming}
+          />
+        </Box>
       </Box>
     </Box>
   );
@@ -311,7 +411,8 @@ function estimateEntryHeight(entry: LogEntry, contentWidth: number): number {
     case "stream":
     case "response": {
       // Split on actual newlines — each line takes 1 row + wrapping
-      const textWidth = Math.max(1, contentWidth - 12);
+      // textWidth reduced by 3 to account for ⎿  prefix
+      const textWidth = Math.max(1, contentWidth - 15);
       const lines = entry.message.split("\n");
       let h = 2; // marginTop(1) + header-row(1)
       for (const line of lines) {

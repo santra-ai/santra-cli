@@ -55,7 +55,7 @@ export default function StatusBar({
   return (
     <Box
       flexDirection="column"
-      borderStyle="classic"
+      borderStyle="single"
       borderTop
       borderBottom={false}
       borderLeft={false}
@@ -70,7 +70,7 @@ export default function StatusBar({
       />
 
       <Box
-        borderStyle="classic"
+        borderStyle="single"
         borderTop
         borderBottom={false}
         borderLeft={false}

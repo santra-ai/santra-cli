@@ -1,6 +1,7 @@
 import { BaseAgent, Swarm } from "@santra/agent-runtime";
 import type { RunState } from "@santra/shared";
 import type { RunnerOptions, RunOptions } from "./types.ts";
+import { classifyPrompt } from "./classifier.ts";
 
 // Runner decides whether to use single-agent mode or swarm mode for a request.
 export class Runner {
@@ -18,8 +19,8 @@ export class Runner {
 
   private shouldUseSwarm(prompt: string, override?: boolean): boolean {
     if (override !== undefined) return override;
-    // Orchestrator handles all routing internally (direct/read/write classification)
-    return !!prompt.trim();
+    // Skip swarm for simple chat and direct questions — only agent tasks need orchestration
+    return classifyPrompt(prompt) === "agent_task";
   }
 
   // Execute one prompt and normalize the return shape for callers.
