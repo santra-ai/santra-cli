@@ -78,6 +78,12 @@ describe("classifyPrompt", () => {
     test('"tell me about monorepos" → direct_answer', () => {
       expect(classifyPrompt("tell me about monorepos")).toBe("direct_answer");
     });
+
+    test('"tell me an essay on cow in 500 words" → direct_answer', () => {
+      expect(classifyPrompt("tell me an essay on cow in 500 words")).toBe(
+        "direct_answer",
+      );
+    });
   });
 
   // ── agent_task ─────────────────────────────────────────────────────────

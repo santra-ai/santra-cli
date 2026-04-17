@@ -22,6 +22,7 @@ export type AgentRunOptions = {
   prompt: string;
   agentId?: AgentId;
   systemPrompt?: string;
+  suppressProgressPhases?: boolean;
   previousMessages?: Message[];
   onDelta?: (chunk: string) => void;
   onPhase?: (phase: AgentPhase) => void;
@@ -77,25 +78,12 @@ function truncateSummary(text: string, max = 120): string {
   return `${normalized.slice(0, Math.max(0, max - 1)).trimEnd()}…`;
 }
 
-function describeModelTurnStart(agentId: string, turn: number, lastUserContent: string): string {
+function describeModelTurnStart(_agentId: string, _turn: number, lastUserContent: string): string {
   if (lastUserContent.includes("<tool_result")) {
-    return turn === 1
-      ? "I have a tool result. I am going to continue from it."
-      : "I reviewed the latest tool result. I am deciding the next step.";
+    return "Reviewing tool result";
   }
 
-  switch (agentId) {
-    case "orchestrator":
-      return "I am going to understand the task and plan the work.";
-    case "file-picker":
-      return "I am going to scan the codebase and decide which files to inspect.";
-    case "reader":
-      return "I am going to read the gathered files and build context.";
-    case "executor":
-      return "I am going to apply the requested change step by step.";
-    default:
-      return "I am going to decide the next step.";
-  }
+  return "Thinking";
 }
 
 function summarizeModelTurnResult(
@@ -423,6 +411,7 @@ export class BaseAgent {
       prompt,
       agentId = "executor",
       systemPrompt,
+      suppressProgressPhases = false,
       previousMessages = [],
       onDelta,
       onPhase,
@@ -473,13 +462,19 @@ export class BaseAgent {
         type: "model_call_start",
         agentId,
         turn,
-        summary: describeModelTurnStart(agentId, turn, lastUserContent),
+        summary: suppressProgressPhases
+          ? "Responding"
+          : describeModelTurnStart(agentId, turn, lastUserContent),
       });
 
       let singleTurnResult = await this.singleTurn(
         messages,
         onDelta,
-        (chunk) => onPhase?.({ type: "thinking", agentId, delta: chunk }),
+        (chunk) => {
+          if (!suppressProgressPhases) {
+            onPhase?.({ type: "thinking", agentId, delta: chunk });
+          }
+        },
         abortSignal,
       );
       for (let r = 0; r < MAX_429_RETRIES && singleTurnResult.error?.startsWith("HTTP 429"); r++) {
@@ -494,7 +489,11 @@ export class BaseAgent {
         singleTurnResult = await this.singleTurn(
           messages,
           onDelta,
-          (chunk) => onPhase?.({ type: "thinking", agentId, delta: chunk }),
+          (chunk) => {
+            if (!suppressProgressPhases) {
+              onPhase?.({ type: "thinking", agentId, delta: chunk });
+            }
+          },
           abortSignal,
         );
       }
@@ -529,11 +528,17 @@ export class BaseAgent {
         } else if (chunk.type === "thinking") {
           const step: ThinkingStep = { agentId, content: chunk.content };
           allThinking.push(step);
-          onPhase?.({ type: "thinking", agentId, delta: chunk.content });
+          if (!suppressProgressPhases) {
+            onPhase?.({ type: "thinking", agentId, delta: chunk.content });
+          }
         } else if (chunk.type === "status") {
-          onPhase?.({ type: "status", agentId, message: chunk.content });
+          if (!suppressProgressPhases) {
+            onPhase?.({ type: "status", agentId, message: chunk.content });
+          }
         } else if (chunk.type === "next") {
-          onPhase?.({ type: "next", agentId, message: chunk.content });
+          if (!suppressProgressPhases) {
+            onPhase?.({ type: "next", agentId, message: chunk.content });
+          }
         } else if (chunk.type === "tool_call") {
           toolCallCounter += 1;
           toolCalls.push({
@@ -557,13 +562,15 @@ export class BaseAgent {
       }
 
       const turnSummary = summarizeModelTurnResult(toolCalls, textContent.trim() || text.trim());
-      onPhase?.({
-        type: "model_call_end",
-        agentId,
-        turn,
-        summary: turnSummary.summary,
-        ...(turnSummary.detail ? { detail: turnSummary.detail } : {}),
-      });
+      if (!suppressProgressPhases) {
+        onPhase?.({
+          type: "model_call_end",
+          agentId,
+          turn,
+          summary: turnSummary.summary,
+          ...(turnSummary.detail ? { detail: turnSummary.detail } : {}),
+        });
+      }
 
       messages.push({ role: "assistant", content: text });
 

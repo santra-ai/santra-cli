@@ -235,6 +235,7 @@ function wrapText(text: string, maxWidth: number): string[] {
 
 function renderMarkdownLine(line: string): TranscriptSegment[] {
   return getCached(renderMarkdownLineCache, line, () => {
+    const trimmed = line.trim();
     const headingMatch = /^(#{1,4})\s+(.+)$/.exec(line);
     if (headingMatch) {
       const level = headingMatch[1]?.length ?? 1;
@@ -243,6 +244,27 @@ function renderMarkdownLine(line: string): TranscriptSegment[] {
       return [
         seg(marker, "heading", { bold: true }),
         ...parseInline(headingMatch[2] ?? "", "heading", { bold: true }),
+      ];
+    }
+
+    const words = trimmed.split(/\s+/).filter(Boolean);
+    const plainHeadingLike =
+      trimmed.length > 0 &&
+      trimmed.length <= 80 &&
+      words.length >= 1 &&
+      words.length <= 10 &&
+      !/[.!?]$/.test(trimmed) &&
+      !/^(?:[•\-\*]|\d+\.)\s+/.test(trimmed) &&
+      !/^[-=]{3,}$/.test(trimmed) &&
+      words.some((word) => /[A-Z]/.test(word[0] ?? "")) &&
+      words.every((word) =>
+        /^(?:[A-Z][\w'-]*|[A-Z][\w'-]*:|[a-z]{1,4}|[IVXLCM]+)$/u.test(word),
+      );
+
+    if (plainHeadingLike) {
+      return [
+        seg("◇ ", "heading", { bold: true }),
+        ...parseInline(trimmed, "heading", { bold: true }),
       ];
     }
 
@@ -262,9 +284,59 @@ function renderMarkdownLine(line: string): TranscriptSegment[] {
       return [seg("✓ ", "success"), ...parseInline(text)];
     }
 
-    if (line.trim() === "") return [seg("")];
+    if (trimmed === "") return [seg("")];
     return parseInline(line);
   });
+}
+
+function classifyHeadingLine(
+  line: string,
+): { marker: string; text: string } | null {
+  const trimmed = line.trim();
+  const headingMatch = /^(#{1,4})\s+(.+)$/.exec(line);
+  if (headingMatch) {
+    const level = headingMatch[1]?.length ?? 1;
+    const marker =
+      level === 1 ? "◆ " : level === 2 ? "◇ " : level === 3 ? "• " : "◦ ";
+    return { marker, text: headingMatch[2] ?? "" };
+  }
+
+  const words = trimmed.split(/\s+/).filter(Boolean);
+  const plainHeadingLike =
+    trimmed.length > 0 &&
+    trimmed.length <= 80 &&
+    words.length >= 1 &&
+    words.length <= 10 &&
+    !/[.!?]$/.test(trimmed) &&
+    !/^(?:[•\-\*]|\d+\.)\s+/.test(trimmed) &&
+    !/^[-=]{3,}$/.test(trimmed) &&
+    words.some((word) => /[A-Z]/.test(word[0] ?? "")) &&
+    words.every((word) =>
+      /^(?:[A-Z][\w'-]*|[A-Z][\w'-]*:|[a-z]{1,4}|[IVXLCM]+)$/u.test(word),
+    );
+
+  if (plainHeadingLike) {
+    return { marker: "◇ ", text: trimmed };
+  }
+
+  return null;
+}
+
+function renderResponseLine(rawLine: string, width: number): TranscriptSegment[][] {
+  const heading = classifyHeadingLine(rawLine);
+  if (!heading) {
+    return wrapText(rawLine, width).map((line) => renderMarkdownLine(line));
+  }
+
+  const wrapped = wrapText(heading.text, Math.max(8, width - heading.marker.length));
+  return wrapped.map((line, index) =>
+    index === 0
+      ? [
+          seg(heading.marker, "heading", { bold: true }),
+          ...parseInline(line, "heading", { bold: true }),
+        ]
+      : parseInline(line, "heading", { bold: true }),
+  );
 }
 
 // All first lines: [timestamp:8]["  ":2][indicator:1][" ":1] = col 12 before content.
@@ -780,13 +852,12 @@ function renderResponse(entry: LogEntry, width: number): TranscriptRow[] {
 
     for (let i = 0; i < contentLines.length; i++) {
       const rawLine = contentLines[i] ?? "";
-      const wrapped = wrapText(rawLine, contentWidth);
+      const renderedLines = renderResponseLine(rawLine, contentWidth);
 
-      for (let j = 0; j < wrapped.length; j++) {
-        const line = wrapped[j] ?? "";
+      for (let j = 0; j < renderedLines.length; j++) {
         const isFirst = i === 0 && j === 0;
         const key = `${entry.id}:${i}:${j}`;
-        const rendered = renderMarkdownLine(line);
+        const rendered = renderedLines[j] ?? [seg("")];
 
         if (isFirst) {
           rows.push(
@@ -811,13 +882,12 @@ function renderResponse(entry: LogEntry, width: number): TranscriptRow[] {
 
   for (let i = 0; i < contentLines.length; i++) {
     const rawLine = contentLines[i] ?? "";
-    const wrapped = wrapText(rawLine, contentWidth);
+    const renderedLines = renderResponseLine(rawLine, contentWidth);
 
-    for (let j = 0; j < wrapped.length; j++) {
-      const line = wrapped[j] ?? "";
+    for (let j = 0; j < renderedLines.length; j++) {
       const isFirst = i === 0 && j === 0;
       const key = `${entry.id}:${i}:${j}`;
-      const rendered = renderMarkdownLine(line);
+      const rendered = renderedLines[j] ?? [seg("")];
 
       if (isFirst) {
         rows.push(

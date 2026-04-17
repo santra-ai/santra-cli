@@ -10,7 +10,7 @@ const TONE_TO_COLOR: Record<string, string> = {
   warning: "yellow",
   danger: "red",
   code: "#9bbcff",
-  heading: "#e0c48e",
+  heading: "yellow",
   file: "#8aaee2",
   command: "#9acb88",
 };

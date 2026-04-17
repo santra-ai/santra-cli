@@ -157,6 +157,7 @@ export default function useAgent(): UseAgentReturn {
   const liveStatusBufferRef = useRef("");
   const liveNextBufferRef = useRef("");
   const sawRealtimeThinkingRef = useRef(false);
+  const sawRealtimeResponseRef = useRef(false);
 
   // Flush timer cleanup on unmount
   useEffect(
@@ -199,6 +200,11 @@ export default function useAgent(): UseAgentReturn {
 
   const handleRealtimeDelta = useCallback(
     (rawChunk: string) => {
+      const streamAsFinalResponse = (
+        agentId: string,
+      ): agentId is "reader" | "executor" =>
+        agentId === "reader" || agentId === "executor";
+
       const normalizedChunk = rawChunk
         .replace(/<thinking\b[^>]*>/gi, "<think>")
         .replace(/<\/thinking\s*>/gi, "</think>")
@@ -237,16 +243,30 @@ export default function useAgent(): UseAgentReturn {
             );
             liveStreamPendingRef.current = pending;
             if (safe) {
-              appendEvent(
-                makeEvent({
-                  type: "text_delta",
-                  agentId:
-                    activeAgentIdRef.current === "unknown"
-                      ? "executor"
-                      : activeAgentIdRef.current,
-                  content: safe,
-                }),
-              );
+              if (
+                activeAgentIdRef.current === "unknown" ||
+                streamAsFinalResponse(activeAgentIdRef.current)
+              ) {
+                sawRealtimeResponseRef.current = true;
+                appendEvent(
+                  makeEvent({
+                    type: "response_delta",
+                    agentId:
+                      activeAgentIdRef.current === "unknown"
+                        ? "agent"
+                        : activeAgentIdRef.current,
+                    content: safe,
+                  }),
+                );
+              } else {
+                appendEvent(
+                  makeEvent({
+                    type: "text_delta",
+                    agentId: activeAgentIdRef.current,
+                    content: safe,
+                  }),
+                );
+              }
             }
             break;
           }
@@ -275,16 +295,30 @@ export default function useAgent(): UseAgentReturn {
               continue;
             }
 
-            appendEvent(
-              makeEvent({
-                type: "text_delta",
-                agentId:
-                  activeAgentIdRef.current === "unknown"
-                    ? "executor"
-                    : activeAgentIdRef.current,
-                content: visible,
-              }),
-            );
+            if (
+              activeAgentIdRef.current === "unknown" ||
+              streamAsFinalResponse(activeAgentIdRef.current)
+            ) {
+              sawRealtimeResponseRef.current = true;
+              appendEvent(
+                makeEvent({
+                  type: "response_delta",
+                  agentId:
+                    activeAgentIdRef.current === "unknown"
+                      ? "agent"
+                      : activeAgentIdRef.current,
+                  content: visible,
+                }),
+              );
+            } else {
+              appendEvent(
+                makeEvent({
+                  type: "text_delta",
+                  agentId: activeAgentIdRef.current,
+                  content: visible,
+                }),
+              );
+            }
           }
 
           if (firstTag === thinkIdx) {
@@ -658,6 +692,7 @@ export default function useAgent(): UseAgentReturn {
       liveStatusBufferRef.current = "";
       liveNextBufferRef.current = "";
       sawRealtimeThinkingRef.current = false;
+      sawRealtimeResponseRef.current = false;
       logDeriverRef.current.reset();
       runIdRef.current = makeId();
       seqRef.current = 0;
@@ -725,7 +760,9 @@ export default function useAgent(): UseAgentReturn {
         } else if (state.output.type === "text") {
           const content = cleanAgentResponse(state.output.content.trim());
           if (content) {
-            await simulateStreaming(content);
+            if (!sawRealtimeResponseRef.current) {
+              await simulateStreaming(content);
+            }
             appendEvent(
               makeEvent({ type: "run_completed", finalOutput: content }),
             );

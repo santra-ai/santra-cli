@@ -237,21 +237,38 @@ export class Swarm {
       return result;
     };
 
-    type AgentOutcome = { output: string; toolResults: SwarmState["toolCallResults"]; error?: string };
+    type AgentOutcome = {
+      output: string;
+      toolResults: SwarmState["toolCallResults"];
+      error?: string;
+      bufferedPhases?: AgentPhase[];
+    };
 
     const runAgent = async (
       agentId: AgentId,
       prompt: string,
       maxIter = 8,
+      opts?: { bufferPhases?: boolean },
     ): Promise<AgentOutcome> => {
-      emit({ type: "agent_start", agentId, task: prompt.slice(0, 120) });
+      const bufferedPhases: AgentPhase[] = [];
+      const forwardPhase = (phase: AgentPhase) => {
+        if (opts?.bufferPhases) bufferedPhases.push(phase);
+        else emit(phase);
+      };
+
+      forwardPhase({ type: "agent_start", agentId, task: prompt.slice(0, 120) });
 
       let agentBuffer = "";
       const localToolResults: SwarmState["toolCallResults"] = [];
 
       // Check abort before running each sub-agent
       if (abortSignal?.aborted) {
-        return { output: "", toolResults: localToolResults, error: "Aborted by user" };
+        return {
+          output: "",
+          toolResults: localToolResults,
+          error: "Aborted by user",
+          bufferedPhases,
+        };
       }
 
       const result = await this.agent.run({
@@ -263,46 +280,51 @@ export class Swarm {
         onFileChangeReview,
         onDelta: (chunk) => {
           agentBuffer += chunk;
-          emit({ type: "delta", agentId, content: chunk });
+          forwardPhase({ type: "delta", agentId, content: chunk });
         },
         onPhase: (phase) => {
           if (phase.type === "tool_call") {
-            emit({ type: "tool_call", call: phase.call });
+            forwardPhase({ type: "tool_call", call: phase.call });
           } else if (phase.type === "tool_result") {
-            emit({ type: "tool_result", result: phase.result });
+            forwardPhase({ type: "tool_result", result: phase.result });
             toolCallResults.push(phase.result);
             localToolResults.push(phase.result);
           } else if (phase.type === "thinking") {
             thinkingSteps.push({ agentId, content: phase.delta });
-            emit({ type: "thinking", agentId, delta: phase.delta });
+            forwardPhase({ type: "thinking", agentId, delta: phase.delta });
           } else if (phase.type === "status") {
-            emit(phase);
+            forwardPhase(phase);
           } else if (phase.type === "next") {
-            emit(phase);
+            forwardPhase(phase);
           } else if (phase.type === "model_call_end") {
             // Only surface model-call summaries when the turn produced a final
             // explanation instead of immediately choosing more tool work.
             if (!phase.detail?.startsWith("Next tools:")) {
-              emit(phase);
+              forwardPhase(phase);
             }
           }
         },
       });
 
       if (result.output.type === "error") {
-        return { output: "", toolResults: localToolResults, error: result.output.message };
+        return {
+          output: "",
+          toolResults: localToolResults,
+          error: result.output.message,
+          bufferedPhases,
+        };
       }
 
       const rawOutput =
         result.output.type === "text" ? result.output.content : "";
       const finalOutput = rawOutput.trim() || stripToolXml(agentBuffer);
 
-      emit({ type: "agent_done", agentId, output: finalOutput });
-      return { output: finalOutput, toolResults: localToolResults };
+      forwardPhase({ type: "agent_done", agentId, output: finalOutput });
+      return { output: finalOutput, toolResults: localToolResults, bufferedPhases };
     };
 
     // ── 1. Orchestrator ────────────────────────────────────────────────────
-    const orchResult = await runAgent("orchestrator", task, 1);
+    const orchResult = await runAgent("orchestrator", task, 1, { bufferPhases: true });
     if (orchResult.error) {
       return { phases, finalOutput: "", toolCallResults, thinkingSteps, error: `Orchestrator failed: ${orchResult.error}` };
     }
@@ -314,6 +336,10 @@ export class Swarm {
       const finalOutput = plan!.direct_answer!;
       emit({ type: "done", finalOutput });
       return { phases, finalOutput, toolCallResults, thinkingSteps };
+    }
+
+    for (const phase of orchResult.bufferedPhases ?? []) {
+      emit(phase);
     }
 
     // Check abort between stages
