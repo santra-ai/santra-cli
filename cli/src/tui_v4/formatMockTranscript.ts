@@ -3,7 +3,7 @@ import type {
   TranscriptIndicator,
   TranscriptRow,
   TranscriptSegment,
-} from "../tui_v3/types";
+} from "./transcript.ts";
 
 const TIMESTAMP_WIDTH = 8;
 const BLANK_TIMESTAMP = " ".repeat(TIMESTAMP_WIDTH);
@@ -11,7 +11,7 @@ const BLANK_TIMESTAMP = " ".repeat(TIMESTAMP_WIDTH);
 function seg(
   text: string,
   tone: TranscriptSegment["tone"] = "default",
-  opts?: Pick<TranscriptSegment, "bold" | "dim" | "italic">,
+  opts?: Partial<Pick<TranscriptSegment, "bold" | "dim" | "italic">>,
 ): TranscriptSegment {
   return { text, tone, ...opts };
 }

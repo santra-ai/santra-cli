@@ -1,21 +1,31 @@
 /**
- * Converts real LogEntry[] (from useAgent / deriveLog) into TranscriptRow[]
+ * Converts real LogEntry[] (from useAgent / LogDeriver) into TranscriptRow[]
  * for rendering in the TUI v4 visual shell.
  *
  * The visual style mirrors formatMockTranscript.ts exactly — only the input
  * type differs (LogEntry vs MockTranscriptItem).
  */
-import type { DiffEntry, LogEntry } from "../tui/types/index.ts";
-import type {
-  TranscriptIndicator,
-  TranscriptRow,
-  TranscriptSegment,
-} from "../tui_v3/types";
+import type { DiffEntry, LogEntry } from "./types.ts";
+import type { TranscriptIndicator, TranscriptRow, TranscriptSegment } from "./transcript.ts";
 
 const TIMESTAMP_WIDTH = 8;
 const BLANK_TIMESTAMP = " ".repeat(TIMESTAMP_WIDTH);
 const DIFF_CONTEXT = 2;   // context lines shown either side of a change
 const MAX_DIFF_SLOTS = 12; // max rendered lines per diff block (excl. header)
+const FORMATTER_CACHE_LIMIT = 2000;
+
+function getCached<K, V>(cache: Map<K, V>, key: K, build: () => V): V {
+  const existing = cache.get(key);
+  if (existing !== undefined) return existing;
+
+  const value = build();
+  cache.set(key, value);
+  if (cache.size > FORMATTER_CACHE_LIMIT) {
+    const firstKey = cache.keys().next().value;
+    if (firstKey !== undefined) cache.delete(firstKey);
+  }
+  return value;
+}
 
 // ---------------------------------------------------------------------------
 // Primitive builders
@@ -24,7 +34,7 @@ const MAX_DIFF_SLOTS = 12; // max rendered lines per diff block (excl. header)
 function seg(
   text: string,
   tone: TranscriptSegment["tone"] = "default",
-  opts?: Pick<TranscriptSegment, "bold" | "dim" | "italic">,
+  opts?: Partial<Pick<TranscriptSegment, "bold" | "dim" | "italic">>,
 ): TranscriptSegment {
   return { text, tone, ...opts };
 }
@@ -64,6 +74,9 @@ function iconIndicator(
 
 const SPECIAL_TOKEN_PATTERN =
   /(?:\.{0,2}\/)?(?:[\w@-]+\/)+[\w@./-]+(?::\d+)?|\/[a-z][\w-]*\b|\b[\w@.-]+\.(?:ts|tsx|js|jsx|mjs|cjs|json|md|mdx|py|go|rs|java|kt|swift|css|scss|html|xml|ya?ml|toml|sh|zsh|txt)\b(?::\d+)?/g;
+const parseInlineCache = new Map<string, TranscriptSegment[]>();
+const wrapTextCache = new Map<string, string[]>();
+const renderMarkdownLineCache = new Map<string, TranscriptSegment[]>();
 
 function pushHighlightedText(
   segments: TranscriptSegment[],
@@ -106,41 +119,61 @@ function parseInline(
   opts?: Pick<TranscriptSegment, "bold" | "dim" | "italic">,
   highlightTokens = true,
 ): TranscriptSegment[] {
-  const segments: TranscriptSegment[] = [];
-  const pattern = /(\*\*(.+?)\*\*|`([^`]+)`)/g;
-  let lastIndex = 0;
-  let match: RegExpExecArray | null;
+  const key = `${tone}|${opts?.bold ? 1 : 0}|${opts?.dim ? 1 : 0}|${opts?.italic ? 1 : 0}|${highlightTokens ? 1 : 0}|${text}`;
+  return getCached(parseInlineCache, key, () => {
+    const segments: TranscriptSegment[] = [];
+    const pattern = /(\*\*\*(.+?)\*\*\*|\*\*(.+?)\*\*|\*(.+?)\*|`([^`]+)`)/g;
+    let lastIndex = 0;
+    let match: RegExpExecArray | null;
 
-  while ((match = pattern.exec(text)) !== null) {
-    if (match.index > lastIndex) {
-      if (highlightTokens) {
-        pushHighlightedText(segments, text.slice(lastIndex, match.index), tone, opts);
+    while ((match = pattern.exec(text)) !== null) {
+      if (match.index > lastIndex) {
+        if (highlightTokens) {
+          pushHighlightedText(segments, text.slice(lastIndex, match.index), tone, opts);
+        } else {
+          segments.push(seg(text.slice(lastIndex, match.index), tone, opts));
+        }
+      }
+      if (match[0].startsWith("***")) {
+        const boldItalicOpts = { ...opts, bold: true, italic: true };
+        const boldItalicTone: TranscriptSegment["tone"] = "heading";
+        if (highlightTokens) {
+          pushHighlightedText(segments, match[2] ?? "", boldItalicTone, boldItalicOpts);
+        } else {
+          segments.push(seg(match[2] ?? "", boldItalicTone, boldItalicOpts));
+        }
+      } else if (match[0].startsWith("**")) {
+        const boldOpts = { ...opts, bold: true };
+        const boldTone: TranscriptSegment["tone"] = "heading";
+        if (highlightTokens) {
+          pushHighlightedText(segments, match[3] ?? "", boldTone, boldOpts);
+        } else {
+          segments.push(seg(match[3] ?? "", boldTone, boldOpts));
+        }
+      } else if (match[0].startsWith("*")) {
+        const italicOpts = { ...opts, italic: true };
+        const italicTone: TranscriptSegment["tone"] = "accent";
+        if (highlightTokens) {
+          pushHighlightedText(segments, match[4] ?? "", italicTone, italicOpts);
+        } else {
+          segments.push(seg(match[4] ?? "", italicTone, italicOpts));
+        }
       } else {
-        segments.push(seg(text.slice(lastIndex, match.index), tone, opts));
+        segments.push(seg(match[5] ?? "", "code", { bold: opts?.bold }));
+      }
+      lastIndex = match.index + match[0].length;
+    }
+
+    if (lastIndex < text.length) {
+      if (highlightTokens) {
+        pushHighlightedText(segments, text.slice(lastIndex), tone, opts);
+      } else {
+        segments.push(seg(text.slice(lastIndex), tone, opts));
       }
     }
-    if (match[0].startsWith("**")) {
-      const boldOpts = { ...opts, bold: true };
-      if (highlightTokens) {
-        pushHighlightedText(segments, match[2] ?? "", tone, boldOpts);
-      } else {
-        segments.push(seg(match[2] ?? "", tone, boldOpts));
-      }
-    } else {
-      segments.push(seg(match[3] ?? "", "code", { bold: opts?.bold }));
-    }
-    lastIndex = match.index + match[0].length;
-  }
 
-  if (lastIndex < text.length) {
-    if (highlightTokens) {
-      pushHighlightedText(segments, text.slice(lastIndex), tone, opts);
-    } else {
-      segments.push(seg(text.slice(lastIndex), tone, opts));
-    }
-  }
-
-  return segments.length > 0 ? segments : [seg(text, tone, opts)];
+    return segments.length > 0 ? segments : [seg(text, tone, opts)];
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -148,59 +181,68 @@ function parseInline(
 // ---------------------------------------------------------------------------
 
 function wrapText(text: string, maxWidth: number): string[] {
-  if (!text) return [""];
-  const safeWidth = Math.max(8, maxWidth);
-  const lines: string[] = [];
-  const paragraphs = text.split("\n");
+  const key = `${maxWidth}|${text}`;
+  return getCached(wrapTextCache, key, () => {
+    if (!text) return [""];
+    const safeWidth = Math.max(8, maxWidth);
+    const lines: string[] = [];
+    const paragraphs = text.split("\n");
 
-  for (const para of paragraphs) {
-    if (para.length <= safeWidth) {
-      lines.push(para);
-      continue;
-    }
-    const words = para.split(" ");
-    let current = "";
-    for (const word of words) {
-      if (!word) { current += " "; continue; }
-      if (current.length === 0) {
-        current = word;
-      } else if (current.length + 1 + word.length <= safeWidth) {
-        current += ` ${word}`;
-      } else {
-        lines.push(current);
-        current = word;
+    for (const para of paragraphs) {
+      if (para.length <= safeWidth) {
+        lines.push(para);
+        continue;
       }
+      const words = para.split(" ");
+      let current = "";
+      for (const word of words) {
+        if (!word) { current += " "; continue; }
+        if (current.length === 0) {
+          current = word;
+        } else if (current.length + 1 + word.length <= safeWidth) {
+          current += ` ${word}`;
+        } else {
+          lines.push(current);
+          current = word;
+        }
+      }
+      if (current.length > 0) lines.push(current);
     }
-    if (current.length > 0) lines.push(current);
-  }
 
-  return lines.length > 0 ? lines : [""];
+    return lines.length > 0 ? lines : [""];
+  });
 }
 
 function renderMarkdownLine(line: string): TranscriptSegment[] {
-  const headingMatch = /^(#{1,3})\s+(.+)$/.exec(line);
-  if (headingMatch) {
-    const level = headingMatch[1]?.length ?? 1;
-    const marker = level === 1 ? "◆ " : level === 2 ? "◇ " : "• ";
-    return [
-      seg(marker, "heading", { bold: true }),
-      ...parseInline(headingMatch[2] ?? "", "heading", { bold: true }),
-    ];
-  }
+  return getCached(renderMarkdownLineCache, line, () => {
+    const headingMatch = /^(#{1,4})\s+(.+)$/.exec(line);
+    if (headingMatch) {
+      const level = headingMatch[1]?.length ?? 1;
+      const marker =
+        level === 1 ? "◆ " :
+        level === 2 ? "◇ " :
+        level === 3 ? "• " :
+        "◦ ";
+      return [
+        seg(marker, "heading", { bold: true }),
+        ...parseInline(headingMatch[2] ?? "", "heading", { bold: true }),
+      ];
+    }
 
-  const bulletMatch = /^[•\-\*]\s+(.+)$/.exec(line);
-  if (bulletMatch) return [seg("• ", "muted"), ...parseInline(bulletMatch[1] ?? "")];
+    const bulletMatch = /^[•\-\*]\s+(.+)$/.exec(line);
+    if (bulletMatch) return [seg("• ", "muted"), ...parseInline(bulletMatch[1] ?? "")];
 
-  const numberedMatch = /^(\d+)\.\s+(.+)$/.exec(line);
-  if (numberedMatch) return [seg(`${numberedMatch[1]}. `, "muted"), ...parseInline(numberedMatch[2] ?? "")];
+    const numberedMatch = /^(\d+)\.\s+(.+)$/.exec(line);
+    if (numberedMatch) return [seg(`${numberedMatch[1]}. `, "muted"), ...parseInline(numberedMatch[2] ?? "")];
 
-  if (line.startsWith("✓ ") || line.startsWith("- [x] ")) {
-    const text = line.replace(/^(✓ |- \[x\] )/, "");
-    return [seg("✓ ", "success"), ...parseInline(text)];
-  }
+    if (line.startsWith("✓ ") || line.startsWith("- [x] ")) {
+      const text = line.replace(/^(✓ |- \[x\] )/, "");
+      return [seg("✓ ", "success"), ...parseInline(text)];
+    }
 
-  if (line.trim() === "") return [seg("")];
-  return parseInline(line);
+    if (line.trim() === "") return [seg("")];
+    return parseInline(line);
+  });
 }
 
 // All first lines: [timestamp:8]["  ":2][indicator:1][" ":1] = col 12 before content.
@@ -306,44 +348,26 @@ function renderSimple(
 
 function renderThink(entry: LogEntry, width: number): TranscriptRow[] {
   const active = !entry.finished;
-  const contentWidth = Math.max(8, width - 13); // timestamp(8) + "  │  "(5)
-  const contentLines = wrapText(entry.message, contentWidth);
-  const rows: TranscriptRow[] = [];
+  const prefixWidth = TIMESTAMP_WIDTH + 4;
+  const contentWidth = Math.max(8, width - prefixWidth);
+  const label = active ? "Thinking: " : "Thought: ";
+  const text = `${label}${entry.message}`.trim();
+  const lines = wrapText(text, contentWidth);
 
-  const topIndicator = active
-    ? spinnerIndicator("cyan")
-    : iconIndicator("●", "gray", { dim: true });
-
-  rows.push(
-    makeRow(
-      `${entry.id}:header`,
-      [seg(entry.time, "muted"), seg("  ┌─ ", "muted", { dim: true })],
-      [seg(" ", "muted"), seg(active ? "thinking…" : "thought", "muted", { italic: true, dim: true })],
-      topIndicator,
-    ),
+  return lines.map((line, i) =>
+    i === 0
+      ? makeRow(
+          `${entry.id}:${i}`,
+          [seg(entry.time, "muted"), seg("  ", "muted")],
+          [seg(" ", "muted"), ...parseInline(line, "muted", { dim: true }, false)],
+          active ? spinnerIndicator("gray") : iconIndicator("·", "gray", { dim: true }),
+        )
+      : makeRow(
+          `${entry.id}:${i}`,
+          CONTINUATION_BEFORE,
+          parseInline(line, "muted", { dim: true }, false),
+        ),
   );
-
-  for (let i = 0; i < contentLines.length; i++) {
-    rows.push(
-      makeRow(
-        `${entry.id}:line:${i}`,
-        [seg(BLANK_TIMESTAMP, "muted"), seg("  │  ", "muted", { dim: true })],
-        parseInline(contentLines[i] ?? "", "muted", { dim: true }, false),
-      ),
-    );
-  }
-
-  if (!active) {
-    rows.push(
-      makeRow(
-        `${entry.id}:footer`,
-        [seg(BLANK_TIMESTAMP, "muted"), seg("  └──", "muted", { dim: true })],
-        [],
-      ),
-    );
-  }
-
-  return rows;
 }
 
 function renderDiff(entry: LogEntry, width: number): TranscriptRow[] {
@@ -476,6 +500,53 @@ function renderResponse(entry: LogEntry, width: number): TranscriptRow[] {
   const prefixWidth = TIMESTAMP_WIDTH + 4;
   const contentWidth = Math.max(8, width - prefixWidth);
   const rows: TranscriptRow[] = [];
+
+  // Active streaming: render the live answer directly so we do not duplicate
+  // it again in the status line below.
+  if (active) {
+    const contentLines = entry.message.split("\n");
+
+    if (contentLines.every((line) => line.trim() === "")) {
+      rows.push(
+        makeRow(
+          `${entry.id}:responding`,
+          [seg(entry.time, "muted"), seg("  ", "muted")],
+          [seg(" ", "muted"), seg("Responding…", "muted", { italic: true, dim: true })],
+          indicator,
+        ),
+      );
+      return rows;
+    }
+
+    for (let i = 0; i < contentLines.length; i++) {
+      const rawLine = contentLines[i] ?? "";
+      const wrapped = wrapText(rawLine, contentWidth);
+
+      for (let j = 0; j < wrapped.length; j++) {
+        const line = wrapped[j] ?? "";
+        const isFirst = i === 0 && j === 0;
+        const key = `${entry.id}:${i}:${j}`;
+        const rendered = renderMarkdownLine(line);
+
+        if (isFirst) {
+          rows.push(
+            makeRow(
+              key,
+              [seg(entry.time, "muted"), seg("  ", "muted")],
+              [seg(" ", "muted"), ...rendered],
+              indicator,
+            ),
+          );
+        } else {
+          rows.push(makeRow(key, CONTINUATION_BEFORE, rendered));
+        }
+      }
+    }
+
+    return rows;
+  }
+
+  // Finalized response: full markdown rendering
   const contentLines = entry.message.split("\n");
 
   for (let i = 0; i < contentLines.length; i++) {
@@ -529,8 +600,8 @@ function renderResponse(entry: LogEntry, width: number): TranscriptRow[] {
 // makes the progression feel continuous in the terminal.
 // ---------------------------------------------------------------------------
 
-const MAX_VISIBLE_BULLETS = 3;
-const MAX_VISIBLE_SECTIONS = 3;
+const MAX_VISIBLE_BULLETS = 5;
+const MAX_VISIBLE_SECTIONS = 5;
 
 function computeVisibleBulletIds(log: LogEntry[]): Set<string> {
   const bulletIds = log
@@ -564,22 +635,7 @@ export function formatLogTranscriptRows(
 
   const maybeAddGap = (entry: LogEntry) => {
     if (renderedEntryCount === 0) return;
-
-    const needsGap =
-      entry.level === "section" ||
-      entry.level === "response" ||
-      entry.level === "error" ||
-      entry.level === "diff";
-
-    const previousWasTransition =
-      previousRenderedLevel === "section" ||
-      previousRenderedLevel === "response" ||
-      previousRenderedLevel === "error" ||
-      previousRenderedLevel === "diff";
-
-    if (needsGap && !previousWasTransition) {
-      rows.push(makeSpacerRow(`${entry.id}:gap-before`));
-    }
+    rows.push(makeSpacerRow(`${entry.id}:gap-before`));
   };
 
   const pushRendered = (entry: LogEntry, renderedRows: TranscriptRow[]) => {

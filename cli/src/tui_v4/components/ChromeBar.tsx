@@ -4,6 +4,7 @@ interface ChromeBarProps {
   width: number;
   scrollOffset: number;
   hiddenRowsAbove: number;
+  projectName: string;
 }
 
 function truncate(text: string, maxWidth: number): string {
@@ -13,13 +14,19 @@ function truncate(text: string, maxWidth: number): string {
   return `${text.slice(0, maxWidth - 1)}…`;
 }
 
-export function ChromeBar({ width, scrollOffset, hiddenRowsAbove }: ChromeBarProps) {
-  const label = "Santra CLI  •  Agent Session";
-  const hint = "Enter send  •  / commands  •  ↑↓ / PgUp / PgDn scroll  •  Esc stop  •  Ctrl+C exit";
+export function ChromeBar({ width, scrollOffset, hiddenRowsAbove, projectName }: ChromeBarProps) {
+  const hint = "Enter send  •  / commands  •  scroll wheel or ↑↓  •  Shift+drag to copy  •  Esc stop";
   const scrollState =
-    scrollOffset > 0 ? `↑ ${hiddenRowsAbove} earlier lines` : "Following live output";
-  const labelText = truncate(label, Math.max(18, Math.floor(width * 0.32)));
-  const hintText = truncate(hint, Math.max(18, width - 4));
+    scrollOffset > 0 ? `↑ ${hiddenRowsAbove} earlier lines` : "Following live";
+
+  // Right-side items: scroll state + app name
+  const appLabel = "santra";
+  const rightSection = `${scrollState}  ${appLabel}`;
+  const rightWidth = Math.min(rightSection.length + 2, Math.floor(width * 0.45));
+
+  // Left side: project indicator
+  const leftMaxWidth = Math.max(10, width - rightWidth - 4);
+  const projectDisplay = truncate(projectName, leftMaxWidth);
 
   return (
     <Box
@@ -33,18 +40,15 @@ export function ChromeBar({ width, scrollOffset, hiddenRowsAbove }: ChromeBarPro
     >
       <Box paddingX={1}>
         <Box flexGrow={1}>
-          <Text color="#b0b0b0">●</Text>
-          <Text color="#b0b0b0"> ●</Text>
-          <Text color="#b0b0b0"> ●</Text>
-          <Text color="#b0b0b0">  ~/santra-cli</Text>
+          <Text color="#7CFFB2">◆ </Text>
+          <Text color="white" bold>{projectDisplay}</Text>
         </Box>
-        <Text color="#b0b0b0">{truncate(scrollState, Math.max(14, Math.floor(width * 0.24)))}</Text>
-        <Text color="#b0b0b0">  </Text>
-        <Text color="white" bold>{labelText}</Text>
+        <Text color="#808080">{truncate(scrollState, Math.max(12, Math.floor(width * 0.28)))}</Text>
+        <Text color="#606060">  santra</Text>
       </Box>
       <Box paddingX={1}>
-        <Text color="#b0b0b0" dimColor>
-          {hintText}
+        <Text color="#606060" dimColor>
+          {truncate(hint, Math.max(18, width - 4))}
         </Text>
       </Box>
     </Box>

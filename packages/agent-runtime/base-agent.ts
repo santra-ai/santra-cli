@@ -234,6 +234,7 @@ export class BaseAgent {
   private async singleTurn(
     messages: Message[],
     onDelta?: (c: string) => void,
+    onReasoning?: (c: string) => void,
     abortSignal?: AbortSignal,
   ): Promise<{ text: string; error?: string; retryAfterMs?: number }> {
     const body: CompletionRequest = {
@@ -317,6 +318,9 @@ export class BaseAgent {
           deltaText += ev.content;
           onDelta?.(ev.content);
         }
+        if (ev.type === "reasoning") {
+          onReasoning?.(ev.content);
+        }
         if (ev.type === "text") finalText = ev.text;
         if (ev.type === "error")
           return { text: finalText || deltaText, error: ev.message };
@@ -380,7 +384,12 @@ export class BaseAgent {
         };
       }
 
-      let singleTurnResult = await this.singleTurn(messages, onDelta, abortSignal);
+      let singleTurnResult = await this.singleTurn(
+        messages,
+        onDelta,
+        (chunk) => onPhase?.({ type: "thinking", agentId, delta: chunk }),
+        abortSignal,
+      );
       for (let r = 0; r < MAX_429_RETRIES && singleTurnResult.error?.startsWith("HTTP 429"); r++) {
         // Respect the upstream Retry-After header; default to 60 s (NIM per-minute limit)
         const delay = singleTurnResult.retryAfterMs ?? 60_000;
@@ -390,7 +399,12 @@ export class BaseAgent {
           singleTurnResult = { text: "", error: "Aborted" };
           break;
         }
-        singleTurnResult = await this.singleTurn(messages, onDelta, abortSignal);
+        singleTurnResult = await this.singleTurn(
+          messages,
+          onDelta,
+          (chunk) => onPhase?.({ type: "thinking", agentId, delta: chunk }),
+          abortSignal,
+        );
       }
       const { text, error } = singleTurnResult;
 

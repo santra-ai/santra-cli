@@ -7,7 +7,8 @@
     "typecheck": "bunx tsc --noEmit --project tsconfig.json",
     "tui": "bun src/tui/index.tsx",
     "tui:v3": "bun src/tui_v3/index.tsx",
-    "tui:v4": "bun src/tui_v4/index.tsx"
+    "tui:v4": "bun src/tui_v4/index.tsx",
+    "tui:v5": "bun src/tui_v5/index.tsx"
   },
   "dependencies": {
     "@santra/core": "workspace:*",

@@ -13,7 +13,7 @@
     "web": "cd web && bun run dev",
     "cli": "bun cli/index.ts",
     "tui": "bun cli/src/tui_v4/index.tsx",
-    "tui:v3": "bun cli/src/tui_v3/index.tsx",
+    "tui:v5": "bun cli/src/tui_v5/index.tsx",
     "typecheck": "bunx tsc --noEmit --project tsconfig.json"
   },
   "workspaces": [

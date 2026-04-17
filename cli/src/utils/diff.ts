@@ -1,4 +1,4 @@
-import type { DiffEntry, DiffLine } from "../tui/types/index.ts";
+import type { DiffEntry, DiffLine } from "../tui_v4/types.ts";
 
 type Edit = { type: "add" | "remove" | "equal"; line: string };
 
