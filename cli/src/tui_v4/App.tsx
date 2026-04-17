@@ -5,16 +5,49 @@ import { Composer } from "./components/Composer";
 import { TranscriptView } from "./components/TranscriptView";
 import { ChromeBar } from "./components/ChromeBar";
 import { formatLogTranscriptRows } from "./formatLogTranscript";
-import { formatTranscriptStatusRows } from "./formatTranscriptStatusRows";
 import useAgent from "./hooks/useAgent";
 import { getSlashSuggestions, sanitizeComposerInput } from "./input";
 import type { LogEntry } from "./types.ts";
+import type { TranscriptRow } from "./transcript.ts";
 
 const PLACEHOLDER = "Ask the agent anything… (/ for commands)";
-const MOUSE_SCROLL_LINES = 3; // lines scrolled per mouse wheel notch
+const MOUSE_SCROLL_LINES = 3;
+type InteractionMode = "scroll" | "select";
 
 // Derived once at module load — never changes during a session
 const PROJECT_NAME = path.basename(process.cwd());
+
+function renderRowText(row: TranscriptRow): string {
+  const before = row.before.map((segment) => segment.text).join("");
+  const indicator = row.indicator
+    ? row.indicator.kind === "icon"
+      ? row.indicator.text
+      : "…"
+    : "";
+  const after = row.after.map((segment) => segment.text).join("");
+  return `${before}${indicator}${after}`.replace(/\s+$/, "");
+}
+
+function copyToClipboard(text: string): boolean {
+  const commands =
+    process.platform === "darwin"
+      ? [["pbcopy"]]
+      : process.platform === "win32"
+        ? [["clip"]]
+        : [["wl-copy"], ["xclip", "-selection", "clipboard"], ["xsel", "--clipboard", "--input"]];
+
+  for (const cmd of commands) {
+    const proc = Bun.spawnSync({
+      cmd,
+      stdin: new TextEncoder().encode(text),
+      stdout: "ignore",
+      stderr: "ignore",
+    });
+    if (proc.exitCode === 0) return true;
+  }
+
+  return false;
+}
 
 export function App() {
   const { exit } = useApp();
@@ -84,18 +117,6 @@ export function App() {
     setCumulativeLog([]);
   }, [clearLog]);
 
-  // Intercept /clear to also wipe cumulative history
-  const handleCommandV4 = useCallback(
-    (cmd: string, arg?: string) => {
-      if (cmd === "clear") {
-        clearAll();
-      } else {
-        handleCommand(cmd, arg);
-      }
-    },
-    [clearAll, handleCommand],
-  );
-
   // Active display: cumulative runs + current run (if in progress)
   const displayLog = useMemo(
     () => [...cumulativeLog, ...log],
@@ -105,6 +126,7 @@ export function App() {
   // ─── Input state ──────────────────────────────────────────────────────────
   const [inputValue, setInputValue] = useState("");
   const [selectedSuggestion, setSelectedSuggestion] = useState(0);
+  const [interactionMode, setInteractionMode] = useState<InteractionMode>("scroll");
 
   const suggestions = useMemo(
     () => getSlashSuggestions(inputValue, savedChats),
@@ -123,33 +145,76 @@ export function App() {
   };
 
   // ─── Transcript rows ──────────────────────────────────────────────────────
-  const transcriptRows = useMemo(
-    () => {
-      const width = Math.max(48, termWidth - 2);
-      return [
-        ...formatLogTranscriptRows(displayLog, width),
-        ...formatTranscriptStatusRows({
-          busy,
-          inputValue,
-          log,
-          tasks,
-          width,
-        }),
-      ];
+  const contentRows = useMemo(() => {
+    const width = Math.max(48, termWidth - 2);
+    return formatLogTranscriptRows(displayLog, width);
+  }, [displayLog, termWidth]);
+
+  const transcriptRows = contentRows;
+
+  // Intercept /clear to also wipe cumulative history
+  const handleCommandV4 = useCallback(
+    (cmd: string, arg?: string) => {
+      if (cmd === "clear") {
+        clearAll();
+        return;
+      }
+
+      if (cmd === "copy") {
+        const transcriptText = transcriptRows
+          .map((row) => renderRowText(row))
+          .filter((line) => line.trim().length > 0)
+          .join("\n");
+
+        const message = copyToClipboard(transcriptText)
+          ? "Copied transcript to clipboard."
+          : "Could not copy transcript automatically. Drag to select text and copy from the terminal.";
+
+        setCumulativeLog((prev) => [
+          ...prev,
+          {
+            id: `copy-${Date.now()}`,
+            time: new Date().toTimeString().slice(0, 8),
+            level: message.startsWith("Copied") ? ("ok" as const) : ("error" as const),
+            message,
+          },
+        ]);
+        return;
+      }
+
+      if (cmd === "help") {
+        handleCommand(cmd, arg);
+        setCumulativeLog((prev) => [
+          ...prev,
+          {
+            id: `help-copy-${Date.now()}`,
+            time: new Date().toTimeString().slice(0, 8),
+            level: "info" as const,
+            message: "/copy  copy the visible transcript to your clipboard",
+          },
+        ]);
+        return;
+      }
+
+      handleCommand(cmd, arg);
     },
-    [busy, displayLog, inputValue, log, tasks, termWidth],
+    [clearAll, handleCommand, transcriptRows],
   );
 
   // ─── Scroll state ─────────────────────────────────────────────────────────
   const [scrollOffset, setScrollOffset] = useState(0);
   const prevRowCountRef = useRef(0);
+  const maxScrollOffsetRef = useRef(0);
+  const lastMouseEventRef = useRef(0);
 
   const suggestionsHeight = suggestions.length > 0 ? suggestions.length + 3 : 0;
   const chromeHeight = 3;
-  const composerHeight = 4 + suggestionsHeight;
+  const composerHeight = 5 + suggestionsHeight; // 4 composer + 1 padding above it
   const transcriptHeight = Math.max(8, termHeight - chromeHeight - composerHeight);
-  const maxScrollOffset = Math.max(0, transcriptRows.length - transcriptHeight);
-  const pageScrollAmount = Math.max(1, Math.floor(transcriptHeight * 0.8));
+  const scrollViewportHeight = Math.max(1, transcriptHeight);
+  const maxScrollOffset = Math.max(0, transcriptRows.length - scrollViewportHeight);
+  const pageScrollAmount = Math.max(1, Math.floor(scrollViewportHeight * 0.8));
+  maxScrollOffsetRef.current = maxScrollOffset;
 
   // Bump offset when new rows arrive while user is scrolled up
   useEffect(() => {
@@ -165,68 +230,68 @@ export function App() {
     setScrollOffset((c) => Math.min(c, maxScrollOffset));
   }, [maxScrollOffset]);
 
-  // ─── Mouse scroll ─────────────────────────────────────────────────────────
-  // Keep current maxScrollOffset available to the stdin data handler without
-  // a stale closure — the handler is set up once and must always read the
-  // latest value.
-  const maxScrollOffsetRef = useRef(maxScrollOffset);
-  maxScrollOffsetRef.current = maxScrollOffset;
-
-  // Timestamp of the most recent mouse scroll event.
-  // Used to suppress leaked escape-sequence bytes from reaching the input bar.
-  const lastMouseEventRef = useRef(0);
+  const toggleInteractionMode = useCallback(() => {
+    setInteractionMode((current) => {
+      const next: InteractionMode = current === "scroll" ? "select" : "scroll";
+      return next;
+    });
+  }, []);
 
   const handleMouseScroll = useCallback((direction: "up" | "down") => {
     lastMouseEventRef.current = Date.now();
     if (direction === "up") {
-      // "up" on wheel = scroll toward older (higher offset)
-      setScrollOffset((c) => Math.min(maxScrollOffsetRef.current, c + MOUSE_SCROLL_LINES));
+      setScrollOffset((current) => Math.min(maxScrollOffsetRef.current, current + MOUSE_SCROLL_LINES));
     } else {
-      setScrollOffset((c) => Math.max(0, c - MOUSE_SCROLL_LINES));
+      setScrollOffset((current) => Math.max(0, current - MOUSE_SCROLL_LINES));
     }
-  }, []); // stable: relies only on refs + stable setState
+  }, []);
 
+  // ─── Terminal interaction mode ───────────────────────────────────────────
   useEffect(() => {
     if (!process.stdin.isTTY) return;
 
-    // Enable X10 basic mouse tracking + SGR extended coordinate encoding.
-    // With these modes, scroll wheel events are reported to stdin.
-    // Text selection still works: hold Shift (most terminals) or Option/Alt (macOS).
-    process.stdout.write("\x1b[?1000h\x1b[?1006h");
+    const enableScrollMode = () => {
+      process.stdout.write("\x1b[?1000h\x1b[?1006h");
+    };
+
+    const enableSelectMode = () => {
+      process.stdout.write("\x1b[?1000l\x1b[?1006l");
+    };
+
+    if (interactionMode === "scroll") enableScrollMode();
+    else enableSelectMode();
 
     const onData = (data: Buffer) => {
-      // ── SGR extended format (preferred, all modern terminals) ──────────────
-      // Sequence: \x1b[<Cb;Cx;CyM  (or lowercase m for release)
-      // Any SGR mouse sequence → stamp suppression ref to block leaked bytes
-      // from reaching the input bar.  Then handle scroll specifically.
-      // Button 64 = scroll up, 65 = scroll down.
-      // Modifier bits: +4 Shift, +8 Alt, +16 Ctrl — mask them out.
       const str = data.toString();
+
+      if (str.includes("\x1bOQ") || str.includes("\x1b[12~")) {
+        toggleInteractionMode();
+        return;
+      }
+
+      if (interactionMode !== "scroll") return;
+
       const sgrRe = /\x1b\[<(\d+);(\d+);(\d+)[Mm]/g;
-      let m: RegExpExecArray | null;
+      let match: RegExpExecArray | null;
       let hasMouse = false;
-      while ((m = sgrRe.exec(str)) !== null) {
+
+      while ((match = sgrRe.exec(str)) !== null) {
         hasMouse = true;
-        const btn = parseInt(m[1]!, 10) & ~28; // ~(4|8|16) strips modifier bits
+        const btn = parseInt(match[1]!, 10) & ~28;
         if (btn === 64) handleMouseScroll("up");
         else if (btn === 65) handleMouseScroll("down");
       }
 
-      // ── X10 fallback (older terminals, some tmux configs) ──────────────────
-      // Sequence: ESC M + 3 raw bytes: btn+32, col+32, row+32
-      // Scroll up btn byte = 64+32 = 96, scroll down = 65+32 = 97
       for (let i = 0; i + 3 < data.length; i++) {
-        if (data[i] === 0x1b && data[i + 1] === 0x4d) { // ESC M
+        if (data[i] === 0x1b && data[i + 1] === 0x4d) {
           hasMouse = true;
           const btn = data[i + 2]!;
           if (btn === 96) handleMouseScroll("up");
           else if (btn === 97) handleMouseScroll("down");
-          i += 3; // skip the full 3-byte payload
+          i += 3;
         }
       }
 
-      // Stamp suppression ref for ANY mouse event (clicks, releases, scroll).
-      // handleMouseScroll already stamps it for scroll, but clicks need it too.
       if (hasMouse) lastMouseEventRef.current = Date.now();
     };
 
@@ -236,7 +301,7 @@ export function App() {
       process.stdout.write("\x1b[?1000l\x1b[?1006l");
       process.stdin.off("data", onData);
     };
-  }, [handleMouseScroll]);
+  }, [handleMouseScroll, interactionMode, toggleInteractionMode]);
 
   // ─── Suggestion execution ─────────────────────────────────────────────────
   const executeSuggestion = useCallback(() => {
@@ -259,6 +324,11 @@ export function App() {
     suggestions.length === 0 && inputValue.length === 0;
 
   useInput((input, key) => {
+    if (input === "\x1bOQ" || input === "\x1b[12~") {
+      toggleInteractionMode();
+      return;
+    }
+
     if (key.ctrl && input === "c") {
       if (busy) abortCurrentRun("keyboard");
       else exit();
@@ -369,9 +439,6 @@ export function App() {
       return;
     }
 
-    // Suppress input for 120ms after a mouse scroll event.
-    // Mouse scroll sequences (e.g. SGR \x1b[<65;X;YM, X10 ESC M + bytes) contain
-    // printable ASCII characters that pass the sanitizer — this gate blocks them.
     if (Date.now() - lastMouseEventRef.current < 120) return;
 
     // Regular character — sanitize to strip any remaining leaked control bytes
@@ -390,21 +457,25 @@ export function App() {
         scrollOffset={scrollOffset}
         hiddenRowsAbove={Math.min(maxScrollOffset, scrollOffset)}
         projectName={PROJECT_NAME}
+        interactionMode={interactionMode}
       />
       <TranscriptView
         rows={transcriptRows}
         width={termWidth}
-        height={transcriptHeight}
+        height={scrollViewportHeight}
         scrollOffset={scrollOffset}
       />
-      <Composer
-        value={inputValue}
-        busy={busy}
-        placeholder={PLACEHOLDER}
-        suggestions={suggestions}
-        selectedSuggestionIdx={selectedSuggestion}
-        stats={stats}
-      />
+      <Box paddingTop={1} width={termWidth}>
+        <Composer
+          value={inputValue}
+          busy={busy}
+          placeholder={PLACEHOLDER}
+          suggestions={suggestions}
+          selectedSuggestionIdx={selectedSuggestion}
+          stats={stats}
+          width={termWidth}
+        />
+      </Box>
     </Box>
   );
 }

@@ -34,7 +34,7 @@ function makeId(): string {
   return Math.random().toString(36).substring(2, 8);
 }
 
-type LiveStreamMode = "text" | "think";
+type LiveStreamMode = "text" | "think" | "status" | "next";
 
 function stripTrailingPartialTag(text: string, tag: string): {
   safe: string;
@@ -151,6 +151,8 @@ export default function useAgent(): UseAgentReturn {
   const activeAgentIdRef = useRef("unknown");
   const liveStreamModeRef = useRef<LiveStreamMode>("text");
   const liveStreamPendingRef = useRef("");
+  const liveStatusBufferRef = useRef("");
+  const liveNextBufferRef = useRef("");
   const sawRealtimeThinkingRef = useRef(false);
 
   // Flush timer cleanup on unmount
@@ -195,7 +197,9 @@ export default function useAgent(): UseAgentReturn {
   const handleRealtimeDelta = useCallback((rawChunk: string) => {
     const normalizedChunk = rawChunk
       .replace(/<thinking>/gi, "<think>")
-      .replace(/<\/thinking>/gi, "</think>");
+      .replace(/<\/thinking>/gi, "</think>")
+      .replace(/<step>/gi, "<status>")
+      .replace(/<\/step>/gi, "</status>");
 
     let remaining = liveStreamPendingRef.current + normalizedChunk;
     liveStreamPendingRef.current = "";
@@ -203,8 +207,18 @@ export default function useAgent(): UseAgentReturn {
     while (remaining.length > 0) {
       if (liveStreamModeRef.current === "text") {
         const thinkIdx = remaining.indexOf("<think>");
-        if (thinkIdx === -1) {
-          const { safe, pending } = stripTrailingPartialTag(remaining, "<think>");
+        const statusIdx = remaining.indexOf("<status>");
+        const nextTagIdx = remaining.indexOf("<next>");
+        const firstTag = Math.min(
+          thinkIdx === -1 ? Infinity : thinkIdx,
+          statusIdx === -1 ? Infinity : statusIdx,
+          nextTagIdx === -1 ? Infinity : nextTagIdx,
+        );
+        if (firstTag === Infinity) {
+          const partialGuard = ["<think>", "<status>", "<next>"].find((t) =>
+            remaining.includes(t.slice(0, 3)),
+          ) ?? "<think>";
+          const { safe, pending } = stripTrailingPartialTag(remaining, partialGuard);
           liveStreamPendingRef.current = pending;
           if (safe) {
             appendEvent(
@@ -220,7 +234,7 @@ export default function useAgent(): UseAgentReturn {
           break;
         }
 
-        const visible = remaining.slice(0, thinkIdx);
+        const visible = remaining.slice(0, firstTag);
         if (visible) {
           appendEvent(
             makeEvent({
@@ -233,8 +247,68 @@ export default function useAgent(): UseAgentReturn {
           );
         }
 
-        remaining = remaining.slice(thinkIdx + "<think>".length);
-        liveStreamModeRef.current = "think";
+        if (firstTag === thinkIdx) {
+          remaining = remaining.slice(thinkIdx + "<think>".length);
+          liveStreamModeRef.current = "think";
+        } else if (firstTag === statusIdx) {
+          remaining = remaining.slice(statusIdx + "<status>".length);
+          liveStreamModeRef.current = "status";
+          liveStatusBufferRef.current = "";
+        } else {
+          remaining = remaining.slice(nextTagIdx + "<next>".length);
+          liveStreamModeRef.current = "next";
+          liveNextBufferRef.current = "";
+        }
+        continue;
+      }
+
+      if (liveStreamModeRef.current === "status") {
+        const closeIdx = remaining.indexOf("</status>");
+        if (closeIdx === -1) {
+          liveStatusBufferRef.current += remaining;
+          liveStreamPendingRef.current = "";
+          break;
+        }
+
+        const status = `${liveStatusBufferRef.current}${remaining.slice(0, closeIdx)}`.trim();
+        if (status) {
+          appendEvent(
+            makeEvent({
+              type: "status_update",
+              agentId: activeAgentIdRef.current === "unknown"
+                ? "executor"
+                : activeAgentIdRef.current,
+              message: status,
+            }),
+          );
+        }
+        liveStatusBufferRef.current = "";
+        remaining = remaining.slice(closeIdx + "</status>".length);
+        liveStreamModeRef.current = "text";
+        continue;
+      }
+
+      if (liveStreamModeRef.current === "next") {
+        const closeIdx = remaining.indexOf("</next>");
+        const agentId = activeAgentIdRef.current === "unknown" ? "executor" : activeAgentIdRef.current;
+
+        if (closeIdx === -1) {
+          liveNextBufferRef.current += remaining;
+          // Stream partial update so the line appears live
+          if (liveNextBufferRef.current.trim()) {
+            appendEvent(makeEvent({ type: "next_update", agentId, message: liveNextBufferRef.current }));
+          }
+          liveStreamPendingRef.current = "";
+          break;
+        }
+
+        const msg = `${liveNextBufferRef.current}${remaining.slice(0, closeIdx)}`.trim();
+        if (msg) {
+          appendEvent(makeEvent({ type: "next_update", agentId, message: msg }));
+        }
+        liveNextBufferRef.current = "";
+        remaining = remaining.slice(closeIdx + "</next>".length);
+        liveStreamModeRef.current = "text";
         continue;
       }
 
@@ -343,6 +417,49 @@ export default function useAgent(): UseAgentReturn {
               type: "reasoning_delta",
               agentId: phase.agentId,
               delta: phase.delta,
+            }),
+          );
+          break;
+
+        case "status":
+          appendEvent(
+            makeEvent({
+              type: "status_update",
+              agentId: phase.agentId,
+              message: phase.message,
+            }),
+          );
+          break;
+
+        case "next":
+          appendEvent(
+            makeEvent({
+              type: "next_update",
+              agentId: phase.agentId,
+              message: phase.message,
+            }),
+          );
+          break;
+
+        case "model_call_start":
+          appendEvent(
+            makeEvent({
+              type: "model_call_started",
+              agentId: phase.agentId,
+              turn: phase.turn,
+              summary: phase.summary,
+            }),
+          );
+          break;
+
+        case "model_call_end":
+          appendEvent(
+            makeEvent({
+              type: "model_call_completed",
+              agentId: phase.agentId,
+              turn: phase.turn,
+              summary: phase.summary,
+              ...(phase.detail ? { detail: phase.detail } : {}),
             }),
           );
           break;
@@ -482,6 +599,8 @@ export default function useAgent(): UseAgentReturn {
       }
       liveStreamModeRef.current = "text";
       liveStreamPendingRef.current = "";
+      liveStatusBufferRef.current = "";
+      liveNextBufferRef.current = "";
       sawRealtimeThinkingRef.current = false;
       logDeriverRef.current.reset();
       runIdRef.current = makeId();
@@ -698,7 +817,7 @@ export default function useAgent(): UseAgentReturn {
               id: makeId(),
               time: timeStamp(),
               level: "info",
-              message: "/clear  /resume [id]  /stop  /model  /help",
+              message: "/clear  /copy  /resume [id]  /stop  /model  /help",
             },
           ]);
           break;

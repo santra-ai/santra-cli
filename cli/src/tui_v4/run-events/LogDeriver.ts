@@ -23,6 +23,14 @@ function normalizeWhitespace(text: string): string {
   return text.replace(/\s+/g, " ").trim();
 }
 
+function summarizeSentence(text: string, max = 88): string {
+  const normalized = normalizeWhitespace(text);
+  if (!normalized) return "";
+  const sentence = normalized.split(/(?<=[.!?])\s+/)[0] ?? normalized;
+  if (sentence.length <= max) return sentence;
+  return `${sentence.slice(0, Math.max(0, max - 1)).trimEnd()}…`;
+}
+
 // Exported so useAgent.ts can apply the same cleaning to fallback output paths
 export { cleanAgentResponse };
 
@@ -58,14 +66,17 @@ function cleanAgentResponse(text: string): string {
 
   // Strip complete reasoning blocks that leaked into visible output.
   s = s.replace(/<think\b[^>]*>[\s\S]*?<\/think>/gi, "");
+  s = s.replace(/<status\b[^>]*>[\s\S]*?<\/status>/gi, "");
 
   // Strip orphaned opening tags (no matching close)
   s = s.replace(/<tool_call\b[^>]*>/gi, "");
   s = s.replace(/<think\b[^>]*>/gi, "");
+  s = s.replace(/<status\b[^>]*>/gi, "");
 
   // Strip orphaned closing tags
   s = s.replace(/<\/tool_(?:call|result)>/gi, "");
   s = s.replace(/<\/think>/gi, "");
+  s = s.replace(/<\/status>/gi, "");
 
   // Strip any incomplete think block that has started but not closed yet.
   s = s.replace(/<think\b[\s\S]*$/gi, "");
@@ -76,13 +87,77 @@ function cleanAgentResponse(text: string): string {
   return s.trim();
 }
 
-function describeSectionStart(agentId: string): string {
+function extractUserTask(task: string): string {
+  const taskMatch = /Task:\s*([^\n]+)/i.exec(task);
+  const extracted = taskMatch?.[1] ?? task;
+  return summarizeSentence(extracted, 84);
+}
+
+function describeSectionStart(agentId: string, task: string): string {
+  const userTask = extractUserTask(task).toLowerCase();
+  const broadRepoRead =
+    userTask.includes("codebase") ||
+    userTask.includes("repo") ||
+    userTask.includes("project");
+
   switch (agentId) {
-    case "orchestrator": return "Planning task";
-    case "file-picker": return "Exploring codebase";
-    case "reader": return "Reading and analyzing files";
-    case "executor": return "Implementing changes";
-    default: return "Working";
+    case "orchestrator":
+      return broadRepoRead ? "Understanding the request" : "Planning the next step";
+    case "file-picker":
+      return broadRepoRead ? "Mapping the repository structure" : "Finding the relevant files";
+    case "reader":
+      return broadRepoRead ? "Reading key files across the repository" : "Reading the relevant files";
+    case "executor":
+      return userTask.includes("read ") || userTask.includes("explain")
+        ? "Preparing the final explanation"
+        : "Implementing the requested change";
+    default:
+      return "Working on the task";
+  }
+}
+
+function summarizeAgentOutput(agentId: string, output: string): string | undefined {
+  const cleaned = cleanAgentResponse(output);
+  if (!cleaned) return undefined;
+
+  const firstLine = cleaned.split("\n").map((line) => normalizeWhitespace(line)).find(Boolean) ?? "";
+  if (!firstLine) return undefined;
+
+  if (agentId === "orchestrator") {
+    if (firstLine.includes('"task_type":"read"') || firstLine.includes('"task_type": "read"')) {
+      return "Decided to inspect the codebase before answering";
+    }
+    if (firstLine.includes('"task_type":"write"') || firstLine.includes('"task_type": "write"')) {
+      return "Decided that code changes are needed";
+    }
+    if (firstLine.includes('"task_type":"direct"') || firstLine.includes('"task_type": "direct"')) {
+      return "Decided this can be answered directly";
+    }
+  }
+
+  return summarizeSentence(firstLine, 96);
+}
+
+function describeModelTurnDone(turn: number, summary: string): string {
+  return summary;
+}
+
+function buildReadPreview(output: string): string | undefined {
+  try {
+    const parsed = JSON.parse(output) as Record<string, unknown>;
+    const content = typeof parsed["content"] === "string" ? parsed["content"] : "";
+    if (!content) return undefined;
+
+    const preview = content
+      .split("\n")
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0 && !line.startsWith("//") && !line.startsWith("/*"))
+      .slice(0, 3)
+      .map((line) => truncateText(line, 96));
+
+    return preview.length > 0 ? preview.join("\n") : undefined;
+  } catch {
+    return undefined;
   }
 }
 
@@ -92,14 +167,14 @@ function describeToolCallActive(name: string, parameters: Record<string, unknown
   const pattern = typeof parameters["pattern"] === "string" ? parameters["pattern"] : undefined;
 
   switch (name) {
-    case "read_file": return `Read ${path ?? "file"}`;
-    case "write_file": return `Write ${path ?? "file"}`;
-    case "str_replace": return `Edit ${path ?? "file"}`;
-    case "list_directory": return `List ${path ?? "."}`;
-    case "search_files": return pattern ? `Find files matching ${pattern}` : "Find files";
-    case "search_text": return query ? `Search code for "${truncateText(query, 48)}"` : "Search code";
-    case "get_cwd": return "Check working directory";
-    default: return `Run ${name}`;
+    case "read_file": return `Reading ${path ?? "file"}`;
+    case "write_file": return `Writing ${path ?? "file"}`;
+    case "str_replace": return `Editing ${path ?? "file"}`;
+    case "list_directory": return `Reading folder ${path ?? "."}`;
+    case "search_files": return pattern ? `Finding files matching ${pattern}` : "Finding files";
+    case "search_text": return query ? `Searching code for "${truncateText(query, 48)}"` : "Searching code";
+    case "get_cwd": return "Checking the working directory";
+    default: return `Running ${name}`;
   }
 }
 
@@ -149,7 +224,13 @@ function buildToolCallDetail(
       const lines = typeof parsed["lines"] === "number" ? parsed["lines"] : undefined;
       const truncated = parsed["truncated"] === true ? "truncated" : undefined;
       const path = typeof parameters["path"] === "string" ? cleanPath(parameters["path"]) : undefined;
-      return [path, lines !== undefined ? `${lines} lines` : undefined, truncated].filter(Boolean).join("\n") || undefined;
+      const preview = buildReadPreview(output);
+      return [
+        path,
+        lines !== undefined ? `${lines} lines` : undefined,
+        truncated,
+        preview,
+      ].filter(Boolean).join("\n") || undefined;
     }
   } catch {
     return undefined;
@@ -207,14 +288,14 @@ function describeToolCallDone(
   const pattern = typeof parameters["pattern"] === "string" ? parameters["pattern"] : undefined;
 
   const base =
-    name === "read_file" ? `Read ${path ?? "file"}` :
-    name === "write_file" ? `Write ${path ?? "file"}` :
-    name === "str_replace" ? `Edit ${path ?? "file"}` :
-    name === "list_directory" ? `List ${path ?? "."}` :
-    name === "search_files" ? (pattern ? `Find files matching ${pattern}` : "Find files") :
-    name === "search_text" ? (query ? `Search code for "${truncateText(query, 48)}"` : "Search code") :
-    name === "get_cwd" ? "Check working directory" :
-    `Run ${name}`;
+    name === "read_file" ? `Reading ${path ?? "file"}` :
+    name === "write_file" ? `Writing ${path ?? "file"}` :
+    name === "str_replace" ? `Editing ${path ?? "file"}` :
+    name === "list_directory" ? `Reading folder ${path ?? "."}` :
+    name === "search_files" ? (pattern ? `Finding files matching ${pattern}` : "Finding files") :
+    name === "search_text" ? (query ? `Searching code for "${truncateText(query, 48)}"` : "Searching code") :
+    name === "get_cwd" ? "Checking the working directory" :
+    `Running ${name}`;
 
   try {
     const parsed = JSON.parse(output) as Record<string, unknown>;
@@ -263,9 +344,20 @@ interface PendingTool {
   name: string;
   parameters: Record<string, unknown>;
   slotIdx: number;
+  label?: string;
 }
 
 interface ThinkState {
+  buffer: string;
+  slotIdx: number;
+}
+
+interface PendingModelCall {
+  turn: number;
+  slotIdx: number;
+}
+
+interface NarrationState {
   buffer: string;
   slotIdx: number;
 }
@@ -282,11 +374,16 @@ export class LogDeriver {
   private slots: EntrySlot[] = [];
   private sections = new Map<string, SectionState>();
   private thinkStates = new Map<string, ThinkState>();
+  private pendingModelCalls = new Map<string, PendingModelCall>();
+  private narrationStates = new Map<string, NarrationState>();
   private pendingTools = new Map<string, PendingTool>();
   private streamSlotIdx: number | null = null;
   private streamAgentId: string | null = null;
   private streamRawBuffer = "";
   private pendingDiffs: Array<{ filePath: string; diff: DiffEntry }> = [];
+  private lastStatusSlotIdx: number | null = null;
+  private lastStatusMessage = "";
+  private nextSlotIdx: number | null = null; // single global replaceable slot
 
   // ── Private helpers ────────────────────────────────────────────────────────
 
@@ -322,6 +419,100 @@ export class LogDeriver {
       .replace(/<tool_call\b[\s\S]*$/gi, "")
       .replace(/<think\b[\s\S]*$/gi, "")
       .replace(/\n{3,}/g, "\n\n");
+  }
+
+  private sanitizeNarrationLine(text: string): string {
+    const cleaned = text
+      .replace(/<tool_call\b[^>]*>/gi, "")
+      .replace(/<\/tool_call>/gi, "")
+      .replace(/<tool_result\b[^>]*>/gi, "")
+      .replace(/<\/tool_result>/gi, "")
+      .replace(/<think\b[^>]*>/gi, "")
+      .replace(/<\/think>/gi, "")
+      .trim();
+
+    if (!cleaned) return "";
+    if (/^<tool_/i.test(cleaned) || /^<\/tool_/i.test(cleaned)) return "";
+    if (/^\{[\s\S]*\}$/.test(cleaned)) {
+      try {
+        JSON.parse(cleaned);
+        return "";
+      } catch {
+        // Keep non-JSON braces content if parsing fails.
+      }
+    }
+    return cleaned;
+  }
+
+  private stripNarrationProtocol(text: string): string {
+    return text
+      .replace(/<tool_call\b[^>]*>[\s\S]*?<\/tool_call>/gi, "\n")
+      .replace(/<tool_result\b[^>]*>[\s\S]*?<\/tool_result>/gi, "\n")
+      .replace(/<tool_call\b[^>]*>[\s\S]*$/gi, "\n")
+      .replace(/<tool_result\b[^>]*>[\s\S]*$/gi, "\n")
+      .replace(/^\s*\{[\s\S]*?\}\s*$/gm, "\n")
+      .replace(/\n{3,}/g, "\n\n");
+  }
+
+  private findNarrationBoundary(text: string): number {
+    for (let i = 0; i < text.length; i++) {
+      const ch = text[i];
+      if (ch === "\n") return i + 1;
+      if ((ch === "." || ch === "!" || ch === "?")) {
+        const next = text[i + 1];
+        if (next === undefined || /\s/.test(next)) return i + 1;
+      }
+    }
+    return -1;
+  }
+
+  private finalizeNarration(agentId: string): void {
+    const narration = this.narrationStates.get(agentId);
+    if (!narration) return;
+
+    const message = this.sanitizeNarrationLine(narration.buffer);
+    if (message) {
+      this.update(narration.slotIdx, () => ({ message, done: true }));
+    } else {
+      this.evict(narration.slotIdx);
+    }
+    this.narrationStates.delete(agentId);
+  }
+
+  private appendNarrationChunk(agentId: string, chunk: string, time: string, eventId: string): void {
+    let remaining = this.stripNarrationProtocol(chunk);
+    while (remaining.length > 0) {
+      const boundaryIdx = this.findNarrationBoundary(remaining);
+      const piece = boundaryIdx === -1 ? remaining : remaining.slice(0, boundaryIdx);
+      const rest = boundaryIdx === -1 ? "" : remaining.slice(boundaryIdx);
+
+      const existing = this.narrationStates.get(agentId);
+      const nextBuffer = `${existing?.buffer ?? ""}${piece}`;
+      const sanitized = this.sanitizeNarrationLine(nextBuffer);
+
+      if (existing) {
+        this.update(existing.slotIdx, () => ({
+          message: sanitized,
+          done: false,
+        }));
+        this.narrationStates.set(agentId, { ...existing, buffer: nextBuffer });
+      } else if (sanitized) {
+        const slotIdx = this.push({
+          id: `${eventId}-narration-${this.slots.length}`,
+          time,
+          level: "narration",
+          message: sanitized,
+          done: false,
+        });
+        this.narrationStates.set(agentId, { buffer: nextBuffer, slotIdx });
+      }
+
+      if (boundaryIdx !== -1) {
+        this.finalizeNarration(agentId);
+      }
+
+      remaining = rest.replace(/^\s+/, "");
+    }
   }
 
   private flushActiveStream(
@@ -371,6 +562,15 @@ export class LogDeriver {
       this.thinkStates.delete(agentId);
     }
 
+    for (const [, pending] of this.pendingModelCalls) {
+      this.update(pending.slotIdx, () => ({ done: true }));
+    }
+    this.pendingModelCalls.clear();
+
+    for (const [agentId] of this.narrationStates) {
+      this.finalizeNarration(agentId);
+    }
+
     for (const [agentId, section] of this.sections) {
       this.update(section.slotIdx, () => ({ finished: true }));
       this.sections.delete(agentId);
@@ -380,6 +580,12 @@ export class LogDeriver {
       this.update(pending.slotIdx, () => ({ done: true }));
     }
     this.pendingTools.clear();
+
+    // Evict the next-reply slot — run is over, "what's next" is no longer relevant.
+    if (this.nextSlotIdx !== null) {
+      this.evict(this.nextSlotIdx);
+      this.nextSlotIdx = null;
+    }
   }
 
   private finalizeThinking(agentId: string): void {
@@ -409,15 +615,47 @@ export class LogDeriver {
         break;
 
       case "agent_started": {
+        this.finalizeNarration(event.agentId);
         const slotIdx = this.push({
           id: `${event.eventId}-section`,
           time,
           level: "section",
-          message: describeSectionStart(event.agentId),
+          message: describeSectionStart(event.agentId, event.task),
           finished: false,
         });
         this.sections.set(event.agentId, { slotIdx });
         this.thinkStates.delete(event.agentId);
+        break;
+      }
+
+      case "model_call_started": {
+        this.finalizeNarration(event.agentId);
+        const slotIdx = this.push({
+          id: `${event.eventId}-model`,
+          time,
+          level: "model",
+          title: `LLM call ${event.turn}`,
+          message: event.summary,
+          done: false,
+        });
+        this.pendingModelCalls.set(`${event.agentId}:${event.turn}`, {
+          turn: event.turn,
+          slotIdx,
+        });
+        break;
+      }
+
+      case "model_call_completed": {
+        const key = `${event.agentId}:${event.turn}`;
+        const pending = this.pendingModelCalls.get(key);
+        if (!pending) break;
+        this.update(pending.slotIdx, () => ({
+          title: `LLM call ${event.turn}`,
+          message: describeModelTurnDone(event.turn, event.summary),
+          ...(event.detail ? { detail: event.detail } : {}),
+          done: true,
+        }));
+        this.pendingModelCalls.delete(key);
         break;
       }
 
@@ -443,7 +681,48 @@ export class LogDeriver {
         break;
       }
 
+      case "status_update": {
+        const statusMessage = summarizeSentence(event.message, 96);
+        const statusSlotIdx = this.push({
+          id: `${event.eventId}-status`,
+          time,
+          level: "status",
+          message: statusMessage,
+        });
+        this.lastStatusSlotIdx = statusSlotIdx;
+        this.lastStatusMessage = statusMessage;
+        break;
+      }
+
+      case "next_update": {
+        // Single global slot — update in-place while streaming, push once if new.
+        const msg = event.message.slice(0, 600);
+        if (this.nextSlotIdx !== null) {
+          this.update(this.nextSlotIdx, () => ({ message: msg, time }));
+        } else {
+          this.nextSlotIdx = this.push({
+            id: `${event.eventId}-next`,
+            time,
+            level: "next",
+            message: msg,
+            done: false,
+          });
+        }
+        break;
+      }
+
       case "text_delta": {
+        // A status not consumed by a tool call stays visible (e.g. "Preparing final explanation").
+        this.lastStatusSlotIdx = null;
+        this.lastStatusMessage = "";
+
+        // Suppress raw intermediate output only while a tool is actively
+        // running. If the model streams plain narration between tool calls,
+        // keep it visible so the user can follow the step-by-step flow.
+        if (this.pendingTools.size > 0) {
+          break;
+        }
+
         this.finalizeThinking(event.agentId);
 
         if (
@@ -472,17 +751,38 @@ export class LogDeriver {
       }
 
       case "tool_call_started": {
+        this.finalizeNarration(event.agentId);
+
+        // Discard any active stream from intermediate model text before this tool call.
+        if (this.streamSlotIdx !== null) {
+          this.evict(this.streamSlotIdx);
+          this.streamSlotIdx = null;
+          this.streamAgentId = null;
+          this.streamRawBuffer = "";
+        }
+
+        // If a status message immediately preceded this tool call, absorb its
+        // human-readable label into the bullet and evict the separate status row.
+        let bulletLabel = describeToolCallActive(event.name, event.parameters);
+        if (this.lastStatusSlotIdx !== null) {
+          bulletLabel = this.lastStatusMessage;
+          this.evict(this.lastStatusSlotIdx);
+          this.lastStatusSlotIdx = null;
+          this.lastStatusMessage = "";
+        }
+
         const slotIdx = this.push({
           id: `${event.toolCallId}-bullet`,
           time,
           level: "bullet",
-          message: describeToolCallActive(event.name, event.parameters),
+          message: bulletLabel,
           done: false,
         });
         this.pendingTools.set(event.toolCallId, {
           name: event.name,
           parameters: event.parameters,
           slotIdx,
+          label: bulletLabel,
         });
         break;
       }
@@ -493,7 +793,8 @@ export class LogDeriver {
 
         if (event.error) {
           this.update(pending.slotIdx, () => ({
-            message: `${describeToolCallActive(event.name, event.parameters)} — failed`,
+            message: `${pending.label ?? describeToolCallActive(event.name, event.parameters)} — failed`,
+            failed: true,
             done: true,
           }));
           this.push({
@@ -504,8 +805,19 @@ export class LogDeriver {
           });
         } else {
           const detail = buildToolCallDetail(event.name, event.parameters, event.output);
+          // If we have a human-readable label, append just the count/stats suffix
+          // from describeToolCallDone rather than its full path-based message.
+          let doneMessage: string;
+          if (pending.label) {
+            const pathBased = describeToolCallDone(event.name, event.parameters, event.output);
+            const dashIdx = pathBased.indexOf(" — ");
+            const suffix = dashIdx !== -1 ? pathBased.slice(dashIdx) : "";
+            doneMessage = `${pending.label}${suffix}`;
+          } else {
+            doneMessage = describeToolCallDone(event.name, event.parameters, event.output);
+          }
           this.update(pending.slotIdx, () => ({
-            message: describeToolCallDone(event.name, event.parameters, event.output),
+            message: doneMessage,
             done: true,
             ...(detail !== undefined ? { detail } : {}),
           }));
@@ -516,11 +828,17 @@ export class LogDeriver {
       }
 
       case "agent_completed": {
+        this.finalizeNarration(event.agentId);
         this.finalizeThinking(event.agentId);
+
 
         const section = this.sections.get(event.agentId);
         if (section) {
-          this.update(section.slotIdx, () => ({ finished: true }));
+          const summary = summarizeAgentOutput(event.agentId, event.output);
+          this.update(section.slotIdx, () => ({
+            finished: true,
+            ...(summary ? { detail: summary } : {}),
+          }));
           this.sections.delete(event.agentId);
         }
 
@@ -541,9 +859,13 @@ export class LogDeriver {
         if (this.streamSlotIdx !== null) {
           this.flushActiveStream(time, "response");
         } else {
-          const cleaned = cleanAgentResponse(event.finalOutput.trim());
-          if (cleaned) {
-            this.push({ id: `${event.eventId}-response`, time, level: "response", message: cleaned });
+          // Only fall back to finalOutput if no response was already streamed live
+          const hasResponse = this.slots.some((s) => s.entry?.level === "response");
+          if (!hasResponse) {
+            const cleaned = cleanAgentResponse(event.finalOutput.trim());
+            if (cleaned) {
+              this.push({ id: `${event.eventId}-response`, time, level: "response", message: cleaned });
+            }
           }
         }
 
@@ -569,6 +891,15 @@ export class LogDeriver {
 
       case "run_interrupted":
         this.finalizeAll();
+        this.push({
+          id: `${event.eventId}-interrupted`,
+          time,
+          level: "info",
+          message:
+            event.source === "keyboard"
+              ? "Run terminated by keyboard."
+              : "Run terminated.",
+        });
         break;
     }
   }
@@ -577,11 +908,16 @@ export class LogDeriver {
     this.slots = [];
     this.sections.clear();
     this.thinkStates.clear();
+    this.pendingModelCalls.clear();
+    this.narrationStates.clear();
     this.pendingTools.clear();
     this.streamSlotIdx = null;
     this.streamAgentId = null;
     this.streamRawBuffer = "";
     this.pendingDiffs = [];
+    this.lastStatusSlotIdx = null;
+    this.lastStatusMessage = "";
+    this.nextSlotIdx = null;
   }
 
   getLog(): LogEntry[] {

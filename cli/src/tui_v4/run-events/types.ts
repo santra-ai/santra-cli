@@ -44,6 +44,45 @@ export type RunEvent =
       delta: string;
     }
   | {
+      type: "status_update";
+      eventId: string;
+      seq: number;
+      runId: string;
+      timestamp: number;
+      agentId: string;
+      message: string;
+    }
+  | {
+      type: "next_update";
+      eventId: string;
+      seq: number;
+      runId: string;
+      timestamp: number;
+      agentId: string;
+      message: string;
+    }
+  | {
+      type: "model_call_started";
+      eventId: string;
+      seq: number;
+      runId: string;
+      timestamp: number;
+      agentId: string;
+      turn: number;
+      summary: string;
+    }
+  | {
+      type: "model_call_completed";
+      eventId: string;
+      seq: number;
+      runId: string;
+      timestamp: number;
+      agentId: string;
+      turn: number;
+      summary: string;
+      detail?: string;
+    }
+  | {
       type: "text_delta";
       eventId: string;
       seq: number;

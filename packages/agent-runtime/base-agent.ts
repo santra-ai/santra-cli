@@ -70,6 +70,88 @@ async function* readSSE(reader: {
   }
 }
 
+function truncateSummary(text: string, max = 120): string {
+  const normalized = text.replace(/\s+/g, " ").trim();
+  if (!normalized) return "";
+  if (normalized.length <= max) return normalized;
+  return `${normalized.slice(0, Math.max(0, max - 1)).trimEnd()}…`;
+}
+
+function describeModelTurnStart(agentId: string, turn: number, lastUserContent: string): string {
+  if (lastUserContent.includes("<tool_result")) {
+    return turn === 1
+      ? "I have a tool result. I am going to continue from it."
+      : "I reviewed the latest tool result. I am deciding the next step.";
+  }
+
+  switch (agentId) {
+    case "orchestrator":
+      return "I am going to understand the task and plan the work.";
+    case "file-picker":
+      return "I am going to scan the codebase and decide which files to inspect.";
+    case "reader":
+      return "I am going to read the gathered files and build context.";
+    case "executor":
+      return "I am going to apply the requested change step by step.";
+    default:
+      return "I am going to decide the next step.";
+  }
+}
+
+function summarizeModelTurnResult(
+  toolCalls: ToolCallRequest[],
+  visibleText: string,
+): { summary: string; detail?: string } {
+  if (toolCalls.length > 0) {
+    const toolNames = toolCalls.map((call) => call.name);
+    const compact = toolNames.slice(0, 3).join(", ");
+    const extra = toolNames.length > 3 ? ` +${toolNames.length - 3} more` : "";
+    return {
+      summary: `I decided to use ${toolCalls.length} tool call${toolCalls.length === 1 ? "" : "s"} next.`,
+      detail: `Next tools: ${compact}${extra}`,
+    };
+  }
+
+  const summary = truncateSummary(visibleText, 90);
+  return summary
+    ? {
+        summary: "I have enough context to explain what I found.",
+        detail: summary,
+      }
+    : {
+        summary: "I finished this step without any visible text.",
+      };
+}
+
+function isBroadRepoExplanationPrompt(prompt: string): boolean {
+  const lower = prompt.toLowerCase();
+  return (
+    lower.includes("whole codebase") ||
+    lower.includes("entire codebase") ||
+    lower.includes("read the whole") ||
+    lower.includes("explain me everything") ||
+    lower.includes("explain everything") ||
+    lower.includes("full project structure") ||
+    lower.includes("entire repository") ||
+    lower.includes("whole repo")
+  );
+}
+
+function isPrematureRepoExplanation(text: string): boolean {
+  const lower = text.toLowerCase();
+  return (
+    lower.includes("sure, i can help") ||
+    lower.includes("i can help you") ||
+    lower.includes("guide you through") ||
+    lower.includes("let's start by") ||
+    lower.includes("first, let's") ||
+    lower.includes("i don't have direct access") ||
+    lower.includes("i don't have access") ||
+    lower.includes("thanks for providing") ||
+    lower.includes("to understand the codebase")
+  );
+}
+
 function extractJsonObjects(text: string): string[] {
   const out: string[] = [];
   let depth = 0;
@@ -369,6 +451,7 @@ export class BaseAgent {
     const allThinking: ThinkingStep[] = [];
     let finalText = "";
     let toolCallCounter = 0;
+    let repoReadNudges = 0;
 
     // Cache original file content for write_file reverts: callId → originalContent
     const originalFileContent = new Map<string, string>();
@@ -383,6 +466,15 @@ export class BaseAgent {
           thinking: allThinking,
         };
       }
+
+      const turn = i + 1;
+      const lastUserContent = messages[messages.length - 1]?.content ?? "";
+      onPhase?.({
+        type: "model_call_start",
+        agentId,
+        turn,
+        summary: describeModelTurnStart(agentId, turn, lastUserContent),
+      });
 
       let singleTurnResult = await this.singleTurn(
         messages,
@@ -438,6 +530,10 @@ export class BaseAgent {
           const step: ThinkingStep = { agentId, content: chunk.content };
           allThinking.push(step);
           onPhase?.({ type: "thinking", agentId, delta: chunk.content });
+        } else if (chunk.type === "status") {
+          onPhase?.({ type: "status", agentId, message: chunk.content });
+        } else if (chunk.type === "next") {
+          onPhase?.({ type: "next", agentId, message: chunk.content });
         } else if (chunk.type === "tool_call") {
           toolCallCounter += 1;
           toolCalls.push({
@@ -460,9 +556,38 @@ export class BaseAgent {
         }
       }
 
+      const turnSummary = summarizeModelTurnResult(toolCalls, textContent.trim() || text.trim());
+      onPhase?.({
+        type: "model_call_end",
+        agentId,
+        turn,
+        summary: turnSummary.summary,
+        ...(turnSummary.detail ? { detail: turnSummary.detail } : {}),
+      });
+
       messages.push({ role: "assistant", content: text });
 
       if (toolCalls.length === 0) {
+        const candidateFinalText = textContent.trim() || text.trim();
+        const successfulResults = allToolResults.filter((result) => !result.error);
+        const readFileCount = successfulResults.filter((result) => result.name === "read_file").length;
+        const directoryCount = successfulResults.filter((result) => result.name === "list_directory").length;
+        const shouldForceMoreExploration =
+          repoReadNudges < 3 &&
+          (agentId === "file-picker" || agentId === "reader") &&
+          isBroadRepoExplanationPrompt(prompt) &&
+          (readFileCount < 8 || directoryCount < 4 || isPrematureRepoExplanation(candidateFinalText));
+
+        if (shouldForceMoreExploration) {
+          repoReadNudges += 1;
+          messages.push({
+            role: "user" as const,
+            content:
+              "Do not answer yet. Keep exploring the repository. Read more real files across the main directories, build enough context from the actual codebase, and only then explain it. Do not say 'I can help' or narrate the process as guidance.",
+          });
+          continue;
+        }
+
         finalText = textContent.trim() || text.trim();
         break;
       }

@@ -33,15 +33,19 @@ The tool result will be returned to you as:
 </tool_result>
 
 After receiving a tool_result, decide what to do next — call another tool or write your final response.
+Before each major step, you may emit a short <status>...</status> line that says what you are about to do.
+When you change from one major step to another, emit a new <status> first.
 
 ## Concrete Examples
 
 ### Example: Read a file
+<status>Reading package metadata</status>
 <tool_call name="read_file">
 {"path": "package.json"}
 </tool_call>
 
 ### Example: List a directory
+<status>Inspecting the root folder</status>
 <tool_call name="list_directory">
 {"path": "."}
 </tool_call>
@@ -88,7 +92,9 @@ After receiving a tool_result, decide what to do next — call another tool or w
 4. The JSON inside the tool_call tag must be valid JSON. Escape newlines as \\n in strings.
 5. Never call a tool that is not listed above.
 6. If the user asks about the repo, paths, files, or current working directory, inspect with tools before answering.
-7. When all tool work is done, write your final answer as plain prose.
-8. NEVER write file contents in your text response — only write_file/str_replace saves to disk.
+7. Emit a short <status> before each major step and before the final answer.
+8. When all tool work is done, write your final answer as plain prose.
+9. NEVER write file contents in your text response — only write_file/str_replace saves to disk.
+
 `.trim();
 }

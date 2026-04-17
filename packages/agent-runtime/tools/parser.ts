@@ -3,6 +3,8 @@ import type { ToolCallRequest, ToolName } from "@santra/shared";
 export type ParsedChunk =
   | { type: "text"; content: string }
   | { type: "thinking"; content: string }
+  | { type: "status"; content: string }
+  | { type: "next"; content: string }
   | { type: "tool_call"; call: ToolCallRequest };
 
 // Models (especially smaller ones) often emit literal newlines/tabs inside JSON
@@ -72,10 +74,14 @@ function tryParseJson(raw: string): Record<string, unknown> | null {
   return null;
 }
 
-type ParserState = "idle" | "in_thinking" | "in_tool";
+type ParserState = "idle" | "in_thinking" | "in_status" | "in_next" | "in_tool";
 
 const THINKING_OPEN = "<think>";
 const THINKING_CLOSE = "</think>";
+const STATUS_OPEN = "<status>";
+const STATUS_CLOSE = "</status>";
+const NEXT_OPEN = "<next>";
+const NEXT_CLOSE = "</next>";
 const TOOL_OPEN_PREFIX = "<tool_call";
 const TOOL_CLOSE = "</tool_call>";
 
@@ -92,9 +98,12 @@ export class StreamParser {
   push(text: string): void {
     this.buffer += text
       .replace(/<thinking>/gi, THINKING_OPEN)
-      .replace(/<\/thinking>/gi, THINKING_CLOSE);
+      .replace(/<\/thinking>/gi, THINKING_CLOSE)
+      .replace(/<step>/gi, STATUS_OPEN)
+      .replace(/<\/step>/gi, STATUS_CLOSE);
     this.flush();
   }
+
 
   finish(): void {
     if (this.state === "idle" && this.buffer.trim().length > 0) {
@@ -128,10 +137,14 @@ export class StreamParser {
     while (this.buffer.length > 0) {
       if (this.state === "idle") {
         const thinkIdx = this.buffer.indexOf(THINKING_OPEN);
+        const statusIdx = this.buffer.indexOf(STATUS_OPEN);
+        const nextTagIdx = this.buffer.indexOf(NEXT_OPEN);
         const toolIdx = this.buffer.indexOf(TOOL_OPEN_PREFIX);
 
         const next = Math.min(
           thinkIdx === -1 ? Infinity : thinkIdx,
+          statusIdx === -1 ? Infinity : statusIdx,
+          nextTagIdx === -1 ? Infinity : nextTagIdx,
           toolIdx === -1 ? Infinity : toolIdx,
         );
 
@@ -145,7 +158,9 @@ export class StreamParser {
           }
         } else if (
           next === thinkIdx &&
-          (toolIdx === -1 || thinkIdx <= toolIdx)
+          (toolIdx === -1 || thinkIdx <= toolIdx) &&
+          (statusIdx === -1 || thinkIdx <= statusIdx) &&
+          (nextTagIdx === -1 || thinkIdx <= nextTagIdx)
         ) {
           if (thinkIdx > 0) {
             this.onChunk({
@@ -155,6 +170,31 @@ export class StreamParser {
           }
           this.buffer = this.buffer.slice(thinkIdx + THINKING_OPEN.length);
           this.state = "in_thinking";
+        } else if (
+          next === statusIdx &&
+          (toolIdx === -1 || statusIdx <= toolIdx) &&
+          (nextTagIdx === -1 || statusIdx <= nextTagIdx)
+        ) {
+          if (statusIdx > 0) {
+            this.onChunk({
+              type: "text",
+              content: this.buffer.slice(0, statusIdx),
+            });
+          }
+          this.buffer = this.buffer.slice(statusIdx + STATUS_OPEN.length);
+          this.state = "in_status";
+        } else if (
+          next === nextTagIdx &&
+          (toolIdx === -1 || nextTagIdx <= toolIdx)
+        ) {
+          if (nextTagIdx > 0) {
+            this.onChunk({
+              type: "text",
+              content: this.buffer.slice(0, nextTagIdx),
+            });
+          }
+          this.buffer = this.buffer.slice(nextTagIdx + NEXT_OPEN.length);
+          this.state = "in_next";
         } else {
           // Tool call: find the closing > of the opening tag
           if (toolIdx > 0) {
@@ -181,6 +221,24 @@ export class StreamParser {
           this.onChunk({ type: "thinking", content });
         }
         this.buffer = this.buffer.slice(ci + THINKING_CLOSE.length);
+        this.state = "idle";
+      } else if (this.state === "in_status") {
+        const ci = this.buffer.indexOf(STATUS_CLOSE);
+        if (ci === -1) break;
+        const content = this.buffer.slice(0, ci).trim();
+        if (content) {
+          this.onChunk({ type: "status", content });
+        }
+        this.buffer = this.buffer.slice(ci + STATUS_CLOSE.length);
+        this.state = "idle";
+      } else if (this.state === "in_next") {
+        const ci = this.buffer.indexOf(NEXT_CLOSE);
+        if (ci === -1) break;
+        const content = this.buffer.slice(0, ci).trim();
+        if (content) {
+          this.onChunk({ type: "next", content });
+        }
+        this.buffer = this.buffer.slice(ci + NEXT_CLOSE.length);
         this.state = "idle";
       } else {
         // in_tool
@@ -210,7 +268,7 @@ export class StreamParser {
   }
 
   private safeIndex(): number {
-    const tags = [TOOL_OPEN_PREFIX, THINKING_OPEN, TOOL_CLOSE, THINKING_CLOSE];
+    const tags = [TOOL_OPEN_PREFIX, THINKING_OPEN, THINKING_CLOSE, STATUS_OPEN, STATUS_CLOSE, NEXT_OPEN, NEXT_CLOSE, TOOL_CLOSE];
     let safe = this.buffer.length;
     for (const tag of tags) {
       for (

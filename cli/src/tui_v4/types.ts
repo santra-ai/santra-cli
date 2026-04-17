@@ -19,6 +19,10 @@ export interface FileEntry {
 export type LogLevel =
   | "user"
   | "section"
+  | "status"
+  | "model"
+  | "narration"
+  | "next"
   | "bullet"
   | "info"
   | "ok"
@@ -46,8 +50,10 @@ export interface LogEntry {
   time: string;
   level: LogLevel;
   message: string;
+  title?: string;
   detail?: string;
   diff?: DiffEntry;
+  failed?: boolean;
   done?: boolean;
   finished?: boolean;
 }

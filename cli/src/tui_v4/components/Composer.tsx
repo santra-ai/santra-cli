@@ -22,6 +22,7 @@ interface ComposerProps {
   suggestions: SlashCommand[];
   selectedSuggestionIdx: number;
   stats: AgentStats;
+  width?: number;
 }
 
 function SuggestionsOverlay({
@@ -69,6 +70,7 @@ export function Composer({
   suggestions,
   selectedSuggestionIdx,
   stats,
+  width,
 }: ComposerProps) {
   const [cursorVisible, setCursorVisible] = useState(true);
 
@@ -96,6 +98,7 @@ export function Composer({
       borderLeft={false}
       borderRight={false}
       borderColor="gray"
+      width={width}
     >
       {suggestions.length > 0 ? (
         <SuggestionsOverlay

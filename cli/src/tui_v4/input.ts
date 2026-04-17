@@ -10,6 +10,7 @@ export interface SlashCommand {
 const BASE_COMMANDS: SlashCommand[] = [
   { name: "/resume", description: "Resume a saved session", kind: "command" },
   { name: "/clear", description: "Clear the visible transcript", kind: "command" },
+  { name: "/copy", description: "Copy the visible transcript", kind: "command" },
   { name: "/stop", description: "Stop the running agent", kind: "command" },
   { name: "/model", description: "Show the current model", kind: "command" },
   { name: "/help", description: "Show available commands", kind: "command" },

@@ -57,6 +57,20 @@ function isDirectAnswer(plan: OrchestratorPlan | null): boolean {
   );
 }
 
+function isBroadRepoExplanationTask(task: string): boolean {
+  const lower = task.toLowerCase();
+  return (
+    lower.includes("whole codebase") ||
+    lower.includes("entire codebase") ||
+    lower.includes("read the whole") ||
+    lower.includes("explain me everything") ||
+    lower.includes("explain everything") ||
+    lower.includes("make me understand") ||
+    lower.includes("whole repo") ||
+    lower.includes("entire repository")
+  );
+}
+
 // ─── JSON helpers ──────────────────────────────────────────────────────────
 
 function parseToolOutput(output: string): Record<string, unknown> | null {
@@ -261,6 +275,16 @@ export class Swarm {
           } else if (phase.type === "thinking") {
             thinkingSteps.push({ agentId, content: phase.delta });
             emit({ type: "thinking", agentId, delta: phase.delta });
+          } else if (phase.type === "status") {
+            emit(phase);
+          } else if (phase.type === "next") {
+            emit(phase);
+          } else if (phase.type === "model_call_end") {
+            // Only surface model-call summaries when the turn produced a final
+            // explanation instead of immediately choosing more tool work.
+            if (!phase.detail?.startsWith("Next tools:")) {
+              emit(phase);
+            }
           }
         },
       });
@@ -297,9 +321,69 @@ export class Swarm {
       return { phases, finalOutput: "", toolCallResults, thinkingSteps, error: "Aborted by user" };
     }
 
-    // ── TIER 2: read — single reader agent answers directly ─────────────────
+    const filePickerPromptText = `Task: ${task}\n\nStart with list_directory path="." to understand the full project structure. Explore all relevant subdirectories. Read every file that relates to the task — be thorough.`;
+
+    // ── TIER 2: read — file-picker → reader ─────────────────────────────────
     if (plan?.task_type === "read") {
-      const readerPromptText = `Task: ${task}\n\nStart with list_directory path="." to understand the full project structure. Explore subdirectories. Read all relevant files thoroughly.`;
+      let filePickerResult = await runAgent("file-picker", filePickerPromptText, 24);
+      if (filePickerResult.error) {
+        return { phases, finalOutput: "", toolCallResults, thinkingSteps, error: `File-picker failed: ${filePickerResult.error}` };
+      }
+
+      const broadRepoExplanation = isBroadRepoExplanationTask(task);
+      let combinedToolResults = [...filePickerResult.toolResults];
+      let filesRead = getReadPaths(combinedToolResults);
+
+      if (broadRepoExplanation && filesRead.length < 8) {
+        const followupFilePicker = await runAgent(
+          "file-picker",
+          `Task: ${task}\n\nYou have not read enough of the repository yet. Continue exploring the main directories. Read many more real source files across core, cli, web, agents, and packages before stopping.`,
+          24,
+        );
+        if (followupFilePicker.error) {
+          return { phases, finalOutput: "", toolCallResults, thinkingSteps, error: `File-picker failed: ${followupFilePicker.error}` };
+        }
+        combinedToolResults = [...combinedToolResults, ...followupFilePicker.toolResults];
+        filesRead = getReadPaths(combinedToolResults);
+      }
+
+      if (filesRead.length === 0) {
+        const rootList = await runManualTool("list_directory", { path: "." });
+        const rootEntries = (() => {
+          const parsed = parseToolOutput(rootList.output);
+          const entries = parsed?.["entries"];
+          return Array.isArray(entries) ? entries : [];
+        })();
+        const manifests = ["README.md", "package.json", "go.mod", "Cargo.toml", "pyproject.toml"];
+        for (const name of manifests) {
+          const found = rootEntries.find(
+            (e): e is { name: string; path: string } =>
+              !!e && typeof e === "object" && (e as { name?: unknown }).name === name,
+          );
+          if (found) await runManualTool("read_file", { path: found.path });
+        }
+      }
+
+      const inlinedFiles = buildFileContext(combinedToolResults);
+      const directoryContext = buildDirectoryContext(combinedToolResults);
+
+      const readerPromptText = [
+        `Task: ${task}`,
+        directoryContext
+          ? `Project structure:\n${directoryContext}`
+          : "",
+        inlinedFiles
+          ? `File contents already gathered:\n\n${inlinedFiles}`
+          : filesRead.length > 0
+            ? `Files already read:\n${filesRead.map((f) => `- ${f}`).join("\n")}`
+            : "Continue exploring the repository with list_directory, search_text, search_files, and read_file before answering.",
+        inlinedFiles
+          ? "Write a high-signal explanation using the gathered repository context. Focus on architecture, execution flow, and important modules. Do not include setup chatter, generic guidance, or line-by-line config recaps."
+          : "Do not answer until you have enough repository context from actual files.",
+      ]
+        .filter(Boolean)
+        .join("\n\n");
+
       const readerResult = await runAgent("reader", readerPromptText, 24);
       if (readerResult.error) {
         return { phases, finalOutput: "", toolCallResults, thinkingSteps, error: `Reader failed: ${readerResult.error}` };
@@ -315,7 +399,6 @@ export class Swarm {
     }
 
     // ── TIER 3: write — file-picker → executor ──────────────────────────────
-    const filePickerPromptText = `Task: ${task}\n\nStart with list_directory path="." to understand the full project structure. Explore all relevant subdirectories. Read every file that relates to the task — be thorough.`;
     const filePickerResult = await runAgent("file-picker", filePickerPromptText, 24);
     if (filePickerResult.error) {
       return { phases, finalOutput: "", toolCallResults, thinkingSteps, error: `File-picker failed: ${filePickerResult.error}` };

@@ -5,6 +5,7 @@ interface ChromeBarProps {
   scrollOffset: number;
   hiddenRowsAbove: number;
   projectName: string;
+  interactionMode: "scroll" | "select";
 }
 
 function truncate(text: string, maxWidth: number): string {
@@ -14,14 +15,18 @@ function truncate(text: string, maxWidth: number): string {
   return `${text.slice(0, maxWidth - 1)}…`;
 }
 
-export function ChromeBar({ width, scrollOffset, hiddenRowsAbove, projectName }: ChromeBarProps) {
-  const hint = "Enter send  •  / commands  •  scroll wheel or ↑↓  •  Shift+drag to copy  •  Esc stop";
+export function ChromeBar({ width, scrollOffset, hiddenRowsAbove, projectName, interactionMode }: ChromeBarProps) {
+  const modeLabel = interactionMode === "scroll" ? "F2 select mode" : "F2 scroll mode";
+  const hint =
+    interactionMode === "scroll"
+      ? "Enter send  •  / commands  •  scroll wheel or ↑↓  •  F2 select mode  •  /copy  •  Esc stop"
+      : "Enter send  •  / commands  •  drag to select  •  F2 scroll mode  •  /copy  •  Esc stop";
   const scrollState =
     scrollOffset > 0 ? `↑ ${hiddenRowsAbove} earlier lines` : "Following live";
 
   // Right-side items: scroll state + app name
   const appLabel = "santra";
-  const rightSection = `${scrollState}  ${appLabel}`;
+  const rightSection = `${modeLabel}  ${scrollState}  ${appLabel}`;
   const rightWidth = Math.min(rightSection.length + 2, Math.floor(width * 0.45));
 
   // Left side: project indicator

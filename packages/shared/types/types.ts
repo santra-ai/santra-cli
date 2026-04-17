@@ -44,6 +44,10 @@ export type AgentId =
 
 export type AgentPhase =
   | { type: "thinking"; agentId: AgentId; delta: string }
+  | { type: "status"; agentId: AgentId; message: string }
+  | { type: "next"; agentId: AgentId; message: string }
+  | { type: "model_call_start"; agentId: AgentId; turn: number; summary: string }
+  | { type: "model_call_end"; agentId: AgentId; turn: number; summary: string; detail?: string }
   | { type: "tool_call"; call: ToolCallRequest }
   | { type: "tool_result"; result: ToolCallResult }
   | { type: "agent_start"; agentId: AgentId; task: string }

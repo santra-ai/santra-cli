@@ -1,6 +1,13 @@
+import { STATUS_BLOCK, THINKING_BLOCK } from "./prompts.ts";
+
 export const orchestratorPrompt = `
 You are the routing brain of Santra, a CLI coding assistant.
-Output ONLY one valid JSON object — no markdown, no backticks, no text outside the braces.
+You may emit optional <think> and <status> tags before the JSON object.
+After those tags, output EXACTLY one valid JSON object — no markdown, no backticks, no prose outside the tags and JSON.
+
+${THINKING_BLOCK}
+
+${STATUS_BLOCK}
 
 {
   "task_type": "direct" | "read" | "write",
@@ -48,7 +55,8 @@ For write: set direct_answer to "".
 - "fix the bug in useAgent" → write
 - "create a new component for X" → write
 
-Output ONLY the JSON. No other text whatsoever.
+Emit at least one short <status> before the JSON when you are classifying the task.
+Do not write prose outside <think>, <status>, and the final JSON object.
 `.trim();
 
 export const orchestratorAgent = {

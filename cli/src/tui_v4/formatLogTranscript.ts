@@ -277,7 +277,7 @@ function renderSection(entry: LogEntry, _width: number): TranscriptRow[] {
     ? spinnerIndicator("cyan")
     : iconIndicator("✓", "green", { bold: true });
 
-  return [
+  const rows = [
     makeRow(
       entry.id,
       [seg(entry.time, "muted"), seg("  ", "muted")],
@@ -288,20 +288,102 @@ function renderSection(entry: LogEntry, _width: number): TranscriptRow[] {
       indicator,
     ),
   ];
+
+  if (entry.detail) {
+    rows.push(
+      makeRow(
+        `${entry.id}:detail`,
+        [seg(BLANK_TIMESTAMP, "muted"), seg("  ⎿  ", "muted", { dim: true })],
+        parseInline(entry.detail, "muted", { dim: true }, false),
+      ),
+    );
+  }
+
+  return rows;
+}
+
+function renderModel(entry: LogEntry, width: number): TranscriptRow[] {
+  const active = !entry.done;
+  const indicator = active
+    ? spinnerIndicator("yellow")
+    : iconIndicator("✓", "green");
+  const tone: TranscriptSegment["tone"] = active ? "warning" : "muted";
+  const title = entry.title ? `${entry.title}  ` : "";
+  const firstLine = `${title}${entry.message}`.trim();
+  const prefixWidth = TIMESTAMP_WIDTH + 7;
+  const contentWidth = Math.max(8, width - prefixWidth);
+  const rows: TranscriptRow[] = wrapText(firstLine, contentWidth).map((line, i) =>
+    i === 0
+      ? makeRow(
+          `${entry.id}:title:${i}`,
+          [seg(entry.time, "muted"), seg("  ", "muted")],
+          [seg(" ", "muted"), ...parseInline(line, tone, undefined, false)],
+          indicator,
+        )
+      : makeRow(
+          `${entry.id}:title:${i}`,
+          CONTINUATION_BEFORE,
+          parseInline(line, tone, undefined, false),
+        ),
+  );
+
+  if (entry.detail) {
+    const detailLines = wrapText(entry.detail, Math.max(8, width - (TIMESTAMP_WIDTH + 7)));
+    for (let i = 0; i < detailLines.length; i++) {
+      rows.push(
+        makeRow(
+          `${entry.id}:detail:${i}`,
+          [seg(BLANK_TIMESTAMP, "muted"), seg("  ⎿  ", "muted", { dim: true })],
+          parseInline(detailLines[i] ?? "", "muted", { dim: true }, false),
+        ),
+      );
+    }
+  }
+
+  return rows;
+}
+
+function renderNarration(entry: LogEntry, width: number): TranscriptRow[] {
+  const active = !entry.done;
+  const prefixWidth = TIMESTAMP_WIDTH + 4;
+  const contentWidth = Math.max(8, width - prefixWidth);
+  const lines = wrapText(entry.message, contentWidth);
+
+  return lines.map((line, i) =>
+    i === 0
+      ? makeRow(
+          `${entry.id}:${i}`,
+          [seg(entry.time, "muted"), seg("  ", "muted")],
+          [seg(" ", "muted"), ...parseInline(line, active ? "default" : "muted", active ? { bold: true } : undefined, false)],
+          active ? spinnerIndicator("cyan") : iconIndicator("·", "gray", { dim: true }),
+        )
+      : makeRow(
+          `${entry.id}:${i}`,
+          CONTINUATION_BEFORE,
+          parseInline(line, active ? "default" : "muted", active ? { bold: true } : { dim: true }, false),
+        ),
+  );
 }
 
 function renderBullet(entry: LogEntry, width: number): TranscriptRow[] {
   const active = !entry.done;
   const indicator = active
-    ? spinnerIndicator("cyan")
-    : iconIndicator("✓", "green");
-  const tone: TranscriptSegment["tone"] = active ? "default" : "muted";
+    ? spinnerIndicator("white")
+    : entry.failed
+      ? iconIndicator("✗", "red")
+      : iconIndicator("✓", "green");
+  const tone: TranscriptSegment["tone"] = active
+    ? "heading"
+    : entry.failed
+      ? "danger"
+      : "muted";
+  const textOpts = active ? { bold: true } : undefined;
 
   const rows: TranscriptRow[] = [
     makeRow(
       `${entry.id}:title`,
       [seg(entry.time, "muted"), seg("  ", "muted")],
-      [seg(" ", "muted"), ...parseInline(entry.message, tone, undefined, false)],
+      [seg(" ", "muted"), ...parseInline(entry.message, tone, textOpts, false)],
       indicator,
     ),
   ];
@@ -310,12 +392,24 @@ function renderBullet(entry: LogEntry, width: number): TranscriptRow[] {
     const prefixWidth = TIMESTAMP_WIDTH + 7;
     const detailWidth = Math.max(8, width - prefixWidth);
     const detailLines = wrapText(entry.detail, detailWidth);
-    for (let i = 0; i < detailLines.length; i++) {
+    const MAX_DETAIL = 5;
+    const shown = detailLines.slice(0, MAX_DETAIL);
+    const overflow = detailLines.length - shown.length;
+    for (let i = 0; i < shown.length; i++) {
       rows.push(
         makeRow(
           `${entry.id}:detail:${i}`,
           [seg(BLANK_TIMESTAMP, "muted"), seg("  ⎿  ", "muted", { dim: true })],
-          parseInline(detailLines[i] ?? "", "muted", { dim: true }, false),
+          parseInline(shown[i] ?? "", "muted", { dim: true }, false),
+        ),
+      );
+    }
+    if (overflow > 0) {
+      rows.push(
+        makeRow(
+          `${entry.id}:detail:more`,
+          [seg(BLANK_TIMESTAMP, "muted"), seg("  ⎿  ", "muted", { dim: true })],
+          [seg(`+${overflow} more`, "muted", { dim: true })],
         ),
       );
     }
@@ -344,6 +438,81 @@ function renderSimple(
         )
       : makeRow(`${entry.id}:${i}`, CONTINUATION_BEFORE, parseInline(line, msgTone, undefined, false)),
   );
+}
+
+function renderStatus(entry: LogEntry, width: number): TranscriptRow[] {
+  const prefixWidth = TIMESTAMP_WIDTH + 4;
+  const contentWidth = Math.max(8, width - prefixWidth);
+  const lines = wrapText(entry.message.trim(), contentWidth);
+
+  return lines.map((line, i) =>
+    i === 0
+      ? makeRow(
+          `${entry.id}:${i}`,
+          [seg(entry.time, "muted"), seg("  ", "muted")],
+          [seg(" ", "muted"), ...parseInline(line, "muted", undefined, false)],
+          iconIndicator("→", "cyan"),
+        )
+      : makeRow(
+          `${entry.id}:${i}`,
+          CONTINUATION_BEFORE,
+          parseInline(line, "muted", undefined, false),
+        ),
+  );
+}
+
+function renderNext(entry: LogEntry, width: number): TranscriptRow[] {
+  const prefixWidth = TIMESTAMP_WIDTH + 4;
+  const contentWidth = Math.max(8, width - prefixWidth);
+
+  // Split "Label: rest of message" — bold the label prefix if present
+  const labelMatch = /^([A-Za-z][A-Za-z ]{0,14}):\s*(.*)$/s.exec(entry.message);
+  const displayMessage = entry.message;
+
+  const lines = wrapText(displayMessage, contentWidth);
+
+  const buildFirstLineSegments = (): TranscriptSegment[] => {
+    const first = lines[0] ?? "";
+    if (labelMatch) {
+      const label = labelMatch[1] ?? "";
+      const rest = labelMatch[2] ?? "";
+      const firstRest = rest.split("\n")[0] ?? rest;
+      const wrapped = wrapText(firstRest, contentWidth - label.length - 2);
+      return [
+        seg(" ", "muted"),
+        seg(`${label}:`, "accent", { bold: true }),
+        seg(" ", "muted"),
+        ...parseInline(wrapped[0] ?? "", "default", undefined, false),
+      ];
+    }
+    return [seg(" ", "muted"), ...parseInline(first, "default", undefined, false)];
+  };
+
+  const rows: TranscriptRow[] = [
+    makeRow(
+      `${entry.id}:0`,
+      [seg(entry.time, "muted"), seg("  ", "muted")],
+      buildFirstLineSegments(),
+      spinnerIndicator("cyan"),
+    ),
+  ];
+
+  // Continuation lines (wrap overflow or multi-line rest)
+  const restLines = labelMatch
+    ? wrapText(labelMatch[2] ?? "", contentWidth).slice(1)
+    : lines.slice(1);
+
+  for (let i = 0; i < restLines.length; i++) {
+    rows.push(
+      makeRow(
+        `${entry.id}:${i + 1}`,
+        CONTINUATION_BEFORE,
+        parseInline(restLines[i] ?? "", "default", undefined, false),
+      ),
+    );
+  }
+
+  return rows;
 }
 
 function renderThink(entry: LogEntry, width: number): TranscriptRow[] {
@@ -589,34 +758,33 @@ function renderResponse(entry: LogEntry, width: number): TranscriptRow[] {
 }
 
 // ---------------------------------------------------------------------------
-// Rolling-window bullet filter
-//
-// Rules:
-//   • Keep a simple rolling window of the last N bullet rows globally.
-//   • New steps appear at the bottom.
-//   • Older steps fall off from the top one-by-one as new ones arrive.
-//
-// This avoids whole groups disappearing at once when a section finishes and
-// makes the progression feel continuous in the terminal.
+// Rolling windows for high-level status rows
 // ---------------------------------------------------------------------------
 
-const MAX_VISIBLE_BULLETS = 5;
-const MAX_VISIBLE_SECTIONS = 5;
+const MAX_VISIBLE_BULLETS = 3;
+const ERROR_BULLET_TTL = 3; // hide an error once this many bullets have followed it
 
-function computeVisibleBulletIds(log: LogEntry[]): Set<string> {
-  const bulletIds = log
-    .filter((entry) => entry.level === "bullet")
-    .map((entry) => entry.id);
-
-  return new Set(bulletIds.slice(-MAX_VISIBLE_BULLETS));
+function computeVisibleErrorIds(log: LogEntry[]): Set<string> {
+  let bulletsAfter = 0;
+  const visible = new Set<string>();
+  for (let i = log.length - 1; i >= 0; i--) {
+    const e = log[i]!;
+    if (e.level === "bullet") bulletsAfter++;
+    else if (e.level === "error" && bulletsAfter < ERROR_BULLET_TTL) visible.add(e.id);
+  }
+  return visible;
 }
 
-function computeVisibleSectionIds(log: LogEntry[]): Set<string> {
-  const sections = log
-    .filter((entry) => entry.level === "section")
+function computeVisibleIds(
+  log: LogEntry[],
+  level: LogEntry["level"],
+  limit: number,
+): Set<string> {
+  const ids = log
+    .filter((entry) => entry.level === level)
     .map((entry) => entry.id);
 
-  return new Set(sections.slice(-MAX_VISIBLE_SECTIONS));
+  return new Set(ids.slice(-limit));
 }
 
 // ---------------------------------------------------------------------------
@@ -627,11 +795,38 @@ export function formatLogTranscriptRows(
   log: LogEntry[],
   width: number,
 ): TranscriptRow[] {
-  const visibleBullets = computeVisibleBulletIds(log);
-  const visibleSections = computeVisibleSectionIds(log);
+  const visibleBulletIds = computeVisibleIds(log, "bullet", MAX_VISIBLE_BULLETS);
+  const visibleErrorIds = computeVisibleErrorIds(log);
+
+  // Build bullet→section map and find the last visible bullet per section.
+  // Sections with visible bullets are "deferred": rendered AFTER their last visible
+  // bullet (not before their first) so the heading stays near the bottom of the
+  // viewport rather than scrolling off the top behind the subpoint rows.
+  const bulletSectionMap = new Map<string, string>();
+  const sectionEntryMap = new Map<string, LogEntry>();
+  let lastSectionId: string | null = null;
+  for (const entry of log) {
+    if (entry.level === "section") {
+      lastSectionId = entry.id;
+      sectionEntryMap.set(entry.id, entry);
+    } else if (entry.level === "bullet" && lastSectionId) {
+      bulletSectionMap.set(entry.id, lastSectionId);
+    }
+  }
+  // Track the last visible bullet per section by scanning log order.
+  const lastVisibleBulletPerSection = new Map<string, string>();
+  for (const entry of log) {
+    if (entry.level !== "bullet") continue;
+    if (!visibleBulletIds.has(entry.id)) continue;
+
+    const sid = bulletSectionMap.get(entry.id);
+    if (sid) lastVisibleBulletPerSection.set(sid, entry.id);
+  }
+  const deferredSectionIds = new Set(lastVisibleBulletPerSection.keys());
+
   const rows: TranscriptRow[] = [];
   let renderedEntryCount = 0;
-  let previousRenderedLevel: LogEntry["level"] | null = null;
+  const renderedSectionIds = new Set<string>();
 
   const maybeAddGap = (entry: LogEntry) => {
     if (renderedEntryCount === 0) return;
@@ -643,7 +838,14 @@ export function formatLogTranscriptRows(
     maybeAddGap(entry);
     rows.push(...renderedRows);
     renderedEntryCount += 1;
-    previousRenderedLevel = entry.level;
+  };
+
+  const renderDeferredSection = (sectionId: string) => {
+    if (renderedSectionIds.has(sectionId)) return;
+    const s = sectionEntryMap.get(sectionId);
+    if (!s) return;
+    pushRendered(s, renderSection(s, width));
+    renderedSectionIds.add(sectionId);
   };
 
   for (const entry of log) {
@@ -653,15 +855,29 @@ export function formatLogTranscriptRows(
         break;
 
       case "section":
-        if (visibleSections.has(entry.id)) {
-          pushRendered(entry, renderSection(entry, width));
-        }
+        if (deferredSectionIds.has(entry.id)) break; // rendered after last visible bullet
+        pushRendered(entry, renderSection(entry, width));
+        renderedSectionIds.add(entry.id);
+        break;
+
+      case "model":
+        break;
+
+      case "narration":
+        break;
+
+      case "status":
+        pushRendered(entry, renderStatus(entry, width));
         break;
 
       case "bullet":
-        // Only render bullets that survived the rolling-window filter
-        if (visibleBullets.has(entry.id)) {
+        if (visibleBulletIds.has(entry.id)) {
           pushRendered(entry, renderBullet(entry, width));
+          // If this is the last visible bullet from its section, render the section now
+          const sid = bulletSectionMap.get(entry.id);
+          if (sid && lastVisibleBulletPerSection.get(sid) === entry.id) {
+            renderDeferredSection(sid);
+          }
         }
         break;
 
@@ -674,8 +890,13 @@ export function formatLogTranscriptRows(
         break;
 
       case "error":
-        pushRendered(entry, renderSimple(entry, "✗", "red", "danger", width));
+        if (visibleErrorIds.has(entry.id)) {
+          pushRendered(entry, renderSimple(entry, "✗", "red", "danger", width));
+        }
         break;
+
+      case "next":
+        break; // rendered in a separate final pass below
 
       case "think":
         pushRendered(entry, renderThink(entry, width));
@@ -686,9 +907,19 @@ export function formatLogTranscriptRows(
         break;
 
       case "stream":
+        pushRendered(entry, renderResponse(entry, width));
+        break;
+
       case "response":
         pushRendered(entry, renderResponse(entry, width));
         break;
+    }
+  }
+
+  // Next-reply always rendered last regardless of insertion order.
+  for (const entry of log) {
+    if (entry.level === "next") {
+      pushRendered(entry, renderNext(entry, width));
     }
   }
 
