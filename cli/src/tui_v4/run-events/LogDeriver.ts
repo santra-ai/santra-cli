@@ -24,7 +24,8 @@ function normalizeWhitespace(text: string): string {
 }
 
 function summarizeSentence(text: string, max = 88): string {
-  const normalized = normalizeWhitespace(text);
+  const cleaned = cleanAgentResponse(text);
+  const normalized = normalizeWhitespace(cleaned);
   if (!normalized) return "";
   const sentence = normalized.split(/(?<=[.!?])\s+/)[0] ?? normalized;
   if (sentence.length <= max) return sentence;
@@ -46,40 +47,39 @@ function cleanAgentResponse(text: string): string {
   let s = text.trim();
   if (!s) return "";
 
-  // Strip pure JSON wrapper (existing behavior) — recurse to also clean extracted value
+  // If it's pure JSON, try to extract a 'text' or 'content' field for better narration.
   if (s.startsWith("{") && s.endsWith("}")) {
     try {
       const parsed = JSON.parse(s) as Record<string, unknown>;
-      for (const key of ["direct_answer", "answer", "content", "response", "text", "message", "output"]) {
+      for (const key of ["text", "content", "summary", "message", "response"]) {
         const val = parsed[key];
-        if (typeof val === "string" && val.trim()) return cleanAgentResponse(val.trim());
+        if (typeof val === "string" && val.trim()) return cleanAgentResponse(val);
       }
-      return ""; // pure internal JSON with no displayable content
-    } catch {
-      // Not valid JSON — fall through to XML stripping
-    }
+      
+      const tt = parsed["task_type"];
+      if (tt === "read") return "Deciding to inspect the codebase...";
+      if (tt === "write") return "Deciding to make changes...";
+      if (tt === "direct") return "Deciding how to answer directly...";
+    } catch { /* not valid JSON, fall through */ }
   }
 
-  // Strip complete <tool_call name="...">...</tool_result> or ...</tool_call> blocks.
-  // The LLM sometimes narrates its tool calls as XML in the response body.
-  s = s.replace(/<tool_call\b[^>]*>[\s\S]*?<\/tool_(?:call|result)>/gi, "");
+  // Strip standalone JSON objects leaked into text.
+  s = s.replace(/\{[\s\S]*?"(?:path|content|entries|lines|matches|id)"[\s\S]*?\}/g, "");
 
-  // Strip complete reasoning blocks that leaked into visible output.
+  // Strip complete XML blocks that leaked into visible output.
+  s = s.replace(/<tool_call\b[^>]*>[\s\S]*?<\/tool_(?:call|result)>/gi, "");
   s = s.replace(/<think\b[^>]*>[\s\S]*?<\/think>/gi, "");
   s = s.replace(/<status\b[^>]*>[\s\S]*?<\/status>/gi, "");
+  s = s.replace(/<next\b[^>]*>[\s\S]*?<\/next>/gi, "");
 
-  // Strip orphaned opening tags (no matching close)
-  s = s.replace(/<tool_call\b[^>]*>/gi, "");
-  s = s.replace(/<think\b[^>]*>/gi, "");
-  s = s.replace(/<status\b[^>]*>/gi, "");
+  // Strip orphaned tags
+  s = s.replace(/<(?:tool_call|tool_result|think|status|next)\b[^>]*>/gi, "");
+  s = s.replace(/<\/(?:tool_call|tool_result|think|status|next)>/gi, "");
 
-  // Strip orphaned closing tags
-  s = s.replace(/<\/tool_(?:call|result)>/gi, "");
-  s = s.replace(/<\/think>/gi, "");
-  s = s.replace(/<\/status>/gi, "");
-
-  // Strip any incomplete think block that has started but not closed yet.
-  s = s.replace(/<think\b[\s\S]*$/gi, "");
+  // Strip anything that looks like an unfinished block at the end
+  s = s.replace(/<\/?(?:tool_call|think|status|next)\b[\s\S]*$/gi, "");
+  s = s.replace(/<\/?[a-z]*$/gi, ""); // Strip any orphaned < or </ at the very end
+  s = s.replace(/(?:<\/\s*>?[ \t]*)+/g, ""); // Strip random orphaned </ that Gemini leaks
 
   // Collapse 3+ consecutive blank lines → 2
   s = s.replace(/\n{3,}/g, "\n\n");
@@ -102,11 +102,17 @@ function describeSectionStart(agentId: string, task: string): string {
 
   switch (agentId) {
     case "orchestrator":
-      return broadRepoRead ? "Understanding the request" : "Planning the next step";
+      return broadRepoRead
+        ? "Understanding the codebase"
+        : "Planning the next step";
     case "file-picker":
-      return broadRepoRead ? "Mapping the repository structure" : "Finding the relevant files";
+      return broadRepoRead
+        ? "Mapping the repository structure"
+        : "Finding the relevant files";
     case "reader":
-      return broadRepoRead ? "Reading key files across the repository" : "Reading the relevant files";
+      return broadRepoRead
+        ? "Reading key files across the repository"
+        : "Reading the relevant files";
     case "executor":
       return userTask.includes("read ") || userTask.includes("explain")
         ? "Preparing the final explanation"
@@ -116,27 +122,23 @@ function describeSectionStart(agentId: string, task: string): string {
   }
 }
 
-function summarizeAgentOutput(agentId: string, output: string): string | undefined {
+function summarizeAgentOutput(
+  agentId: string,
+  output: string,
+): string | undefined {
   const cleaned = cleanAgentResponse(output);
   if (!cleaned) return undefined;
 
-  const firstLine = cleaned.split("\n").map((line) => normalizeWhitespace(line)).find(Boolean) ?? "";
-  if (!firstLine) return undefined;
-
-  if (agentId === "orchestrator") {
-    if (firstLine.includes('"task_type":"read"') || firstLine.includes('"task_type": "read"')) {
-      return "Decided to inspect the codebase before answering";
-    }
-    if (firstLine.includes('"task_type":"write"') || firstLine.includes('"task_type": "write"')) {
-      return "Decided that code changes are needed";
-    }
-    if (firstLine.includes('"task_type":"direct"') || firstLine.includes('"task_type": "direct"')) {
-      return "Decided this can be answered directly";
-    }
+  // For orchestrator/file-picker, show more. For others, just the first relevant line.
+  if (agentId === "orchestrator" || agentId === "file-picker") {
+    return cleaned.length > 500 ? `${cleaned.slice(0, 500)}...` : cleaned;
   }
-
-  return summarizeSentence(firstLine, 96);
+  
+  // The reader and executor final responses are streamed separately, so don't summarize them here
+  // to avoid duplicating their entire text block inside the section checkmark.
+  return undefined;
 }
+
 
 function describeModelTurnDone(turn: number, summary: string): string {
   return summary;
@@ -145,13 +147,17 @@ function describeModelTurnDone(turn: number, summary: string): string {
 function buildReadPreview(output: string): string | undefined {
   try {
     const parsed = JSON.parse(output) as Record<string, unknown>;
-    const content = typeof parsed["content"] === "string" ? parsed["content"] : "";
+    const content =
+      typeof parsed["content"] === "string" ? parsed["content"] : "";
     if (!content) return undefined;
 
     const preview = content
       .split("\n")
       .map((line) => line.trim())
-      .filter((line) => line.length > 0 && !line.startsWith("//") && !line.startsWith("/*"))
+      .filter(
+        (line) =>
+          line.length > 0 && !line.startsWith("//") && !line.startsWith("/*"),
+      )
       .slice(0, 3)
       .map((line) => truncateText(line, 96));
 
@@ -161,20 +167,40 @@ function buildReadPreview(output: string): string | undefined {
   }
 }
 
-function describeToolCallActive(name: string, parameters: Record<string, unknown>): string {
-  const path = typeof parameters["path"] === "string" ? cleanPath(parameters["path"]) : undefined;
-  const query = typeof parameters["query"] === "string" ? parameters["query"] : undefined;
-  const pattern = typeof parameters["pattern"] === "string" ? parameters["pattern"] : undefined;
+function describeToolCallActive(
+  name: string,
+  parameters: Record<string, unknown>,
+): string {
+  const path =
+    typeof parameters["path"] === "string"
+      ? cleanPath(parameters["path"])
+      : undefined;
+  const query =
+    typeof parameters["query"] === "string" ? parameters["query"] : undefined;
+  const pattern =
+    typeof parameters["pattern"] === "string"
+      ? parameters["pattern"]
+      : undefined;
 
   switch (name) {
-    case "read_file": return `Reading ${path ?? "file"}`;
-    case "write_file": return `Writing ${path ?? "file"}`;
-    case "str_replace": return `Editing ${path ?? "file"}`;
-    case "list_directory": return `Reading folder ${path ?? "."}`;
-    case "search_files": return pattern ? `Finding files matching ${pattern}` : "Finding files";
-    case "search_text": return query ? `Searching code for "${truncateText(query, 48)}"` : "Searching code";
-    case "get_cwd": return "Checking the working directory";
-    default: return `Running ${name}`;
+    case "read_file":
+      return `Reading ${path ?? "file"}`;
+    case "write_file":
+      return `Writing ${path ?? "file"}`;
+    case "str_replace":
+      return `Editing ${path ?? "file"}`;
+    case "list_directory":
+      return `Reading folder ${path ?? "."}`;
+    case "search_files":
+      return pattern ? `Finding files matching ${pattern}` : "Finding files";
+    case "search_text":
+      return query
+        ? `Searching code for "${truncateText(query, 48)}"`
+        : "Searching code";
+    case "get_cwd":
+      return "Checking the working directory";
+    default:
+      return `Running ${name}`;
   }
 }
 
@@ -187,10 +213,15 @@ function buildToolCallDetail(
     const parsed = JSON.parse(output) as Record<string, unknown>;
 
     if (name === "list_directory") {
-      const entries = parsed["entries"] as Array<{ name: string; type: "file" | "directory" }> | undefined;
+      const entries = parsed["entries"] as
+        | Array<{ name: string; type: "file" | "directory" }>
+        | undefined;
       if (!entries?.length) return undefined;
-      const shown = entries.slice(0, 8).map((e) => e.type === "directory" ? `${e.name}/` : e.name);
-      if (entries.length > shown.length) shown.push(`… ${entries.length - shown.length} more`);
+      const shown = entries
+        .slice(0, 8)
+        .map((e) => (e.type === "directory" ? `${e.name}/` : e.name));
+      if (entries.length > shown.length)
+        shown.push(`… ${entries.length - shown.length} more`);
       return shown.join("\n");
     }
 
@@ -198,20 +229,28 @@ function buildToolCallDetail(
       const files = parsed["files"] as string[] | undefined;
       if (!files?.length) return undefined;
       const shown = files.slice(0, 6).map((f) => cleanPath(f));
-      if (files.length > shown.length) shown.push(`… ${files.length - shown.length} more`);
+      if (files.length > shown.length)
+        shown.push(`… ${files.length - shown.length} more`);
       return shown.join("\n");
     }
 
     if (name === "search_text") {
-      const matches = parsed["matches"] as Array<{ file?: string; line?: number; text?: string }> | undefined;
+      const matches = parsed["matches"] as
+        | Array<{ file?: string; line?: number; text?: string }>
+        | undefined;
       if (!matches?.length) return undefined;
       const shown = matches.slice(0, 5).map((m) => {
         const file = typeof m.file === "string" ? cleanPath(m.file) : "file";
-        const line = typeof m.line === "number" && m.line > 0 ? `:${m.line}` : "";
-        const snippet = typeof m.text === "string" ? truncateText(normalizeWhitespace(m.text)) : "";
+        const line =
+          typeof m.line === "number" && m.line > 0 ? `:${m.line}` : "";
+        const snippet =
+          typeof m.text === "string"
+            ? truncateText(normalizeWhitespace(m.text))
+            : "";
         return snippet ? `${file}${line}  ${snippet}` : `${file}${line}`;
       });
-      if (matches.length > shown.length) shown.push(`… ${matches.length - shown.length} more`);
+      if (matches.length > shown.length)
+        shown.push(`… ${matches.length - shown.length} more`);
       return shown.join("\n");
     }
 
@@ -221,16 +260,24 @@ function buildToolCallDetail(
     }
 
     if (name === "read_file") {
-      const lines = typeof parsed["lines"] === "number" ? parsed["lines"] : undefined;
+      const lines =
+        typeof parsed["lines"] === "number" ? parsed["lines"] : undefined;
       const truncated = parsed["truncated"] === true ? "truncated" : undefined;
-      const path = typeof parameters["path"] === "string" ? cleanPath(parameters["path"]) : undefined;
+      const path =
+        typeof parameters["path"] === "string"
+          ? cleanPath(parameters["path"])
+          : undefined;
       const preview = buildReadPreview(output);
-      return [
-        path,
-        lines !== undefined ? `${lines} lines` : undefined,
-        truncated,
-        preview,
-      ].filter(Boolean).join("\n") || undefined;
+      return (
+        [
+          path,
+          lines !== undefined ? `${lines} lines` : undefined,
+          truncated,
+          preview,
+        ]
+          .filter(Boolean)
+          .join("\n") || undefined
+      );
     }
   } catch {
     return undefined;
@@ -238,34 +285,55 @@ function buildToolCallDetail(
   return undefined;
 }
 
-function describeToolError(name: string, parameters: Record<string, unknown>, error: string): string {
-  const path = typeof parameters["path"] === "string" ? cleanPath(parameters["path"]) : undefined;
+function describeToolError(
+  name: string,
+  parameters: Record<string, unknown>,
+  error: string,
+): string {
+  const path =
+    typeof parameters["path"] === "string"
+      ? cleanPath(parameters["path"])
+      : undefined;
 
   if (error === `${name}: 'path' is required`) {
     if (name === "read_file") return "Couldn't read a file — no path provided.";
-    if (name === "write_file") return "Couldn't write a file — no path provided.";
-    if (name === "str_replace") return "Couldn't edit a file — no path provided.";
+    if (name === "write_file")
+      return "Couldn't write a file — no path provided.";
+    if (name === "str_replace")
+      return "Couldn't edit a file — no path provided.";
   }
-  if (error === "write_file: 'content' is required") return "Couldn't write file — no content provided.";
-  if (error === "str_replace: 'old_string' is required") return "Couldn't edit file — replacement source missing.";
-  if (error === "str_replace: 'new_string' is required") return "Couldn't edit file — replacement target missing.";
-  if (error === "search_files: 'pattern' is required") return "Couldn't search files — no pattern provided.";
-  if (error === "search_text: 'query' is required") return "Couldn't search code — no query provided.";
+  if (error === "write_file: 'content' is required")
+    return "Couldn't write file — no content provided.";
+  if (error === "str_replace: 'old_string' is required")
+    return "Couldn't edit file — replacement source missing.";
+  if (error === "str_replace: 'new_string' is required")
+    return "Couldn't edit file — replacement target missing.";
+  if (error === "search_files: 'pattern' is required")
+    return "Couldn't search files — no pattern provided.";
+  if (error === "search_text: 'query' is required")
+    return "Couldn't search code — no query provided.";
 
   const missingFile = /^read_file: not found: (.+)$/.exec(error);
-  if (missingFile) return `Not found: ${cleanPath(missingFile[1] ?? path ?? "that file")}`;
+  if (missingFile)
+    return `Not found: ${cleanPath(missingFile[1] ?? path ?? "that file")}`;
 
   const missingDir = /^list_directory: not found: (.+)$/.exec(error);
-  if (missingDir) return `Directory not found: ${cleanPath(missingDir[1] ?? path ?? ".")}`;
+  if (missingDir)
+    return `Directory not found: ${cleanPath(missingDir[1] ?? path ?? ".")}`;
 
   const missingEditFile = /^str_replace: file not found: (.+)$/.exec(error);
-  if (missingEditFile) return `Not found: ${cleanPath(missingEditFile[1] ?? path ?? "that file")}`;
+  if (missingEditFile)
+    return `Not found: ${cleanPath(missingEditFile[1] ?? path ?? "that file")}`;
 
   const directoryMatch = /^read_file: '(.+)' is a directory/.exec(error);
-  if (directoryMatch) return `${cleanPath(directoryMatch[1] ?? path ?? "That path")} is a directory.`;
+  if (directoryMatch)
+    return `${cleanPath(directoryMatch[1] ?? path ?? "That path")} is a directory.`;
 
-  const oldStringMatch = /^str_replace: old_string not found in (.+)\./.exec(error);
-  if (oldStringMatch) return `Text to replace not found in ${cleanPath(oldStringMatch[1] ?? path ?? "that file")}.`;
+  const oldStringMatch = /^str_replace: old_string not found in (.+)\./.exec(
+    error,
+  );
+  if (oldStringMatch)
+    return `Text to replace not found in ${cleanPath(oldStringMatch[1] ?? path ?? "that file")}.`;
 
   const prefix = `${name}: `;
   const cleaned = error.startsWith(prefix) ? error.slice(prefix.length) : error;
@@ -283,19 +351,37 @@ function describeToolCallDone(
 ): string {
   if (error) return `${describeToolCallActive(name, parameters)} — failed`;
 
-  const path = typeof parameters["path"] === "string" ? cleanPath(parameters["path"]) : undefined;
-  const query = typeof parameters["query"] === "string" ? parameters["query"] : undefined;
-  const pattern = typeof parameters["pattern"] === "string" ? parameters["pattern"] : undefined;
+  const path =
+    typeof parameters["path"] === "string"
+      ? cleanPath(parameters["path"])
+      : undefined;
+  const query =
+    typeof parameters["query"] === "string" ? parameters["query"] : undefined;
+  const pattern =
+    typeof parameters["pattern"] === "string"
+      ? parameters["pattern"]
+      : undefined;
 
   const base =
-    name === "read_file" ? `Reading ${path ?? "file"}` :
-    name === "write_file" ? `Writing ${path ?? "file"}` :
-    name === "str_replace" ? `Editing ${path ?? "file"}` :
-    name === "list_directory" ? `Reading folder ${path ?? "."}` :
-    name === "search_files" ? (pattern ? `Finding files matching ${pattern}` : "Finding files") :
-    name === "search_text" ? (query ? `Searching code for "${truncateText(query, 48)}"` : "Searching code") :
-    name === "get_cwd" ? "Checking the working directory" :
-    `Running ${name}`;
+    name === "read_file"
+      ? `Reading ${path ?? "file"}`
+      : name === "write_file"
+        ? `Writing ${path ?? "file"}`
+        : name === "str_replace"
+          ? `Editing ${path ?? "file"}`
+          : name === "list_directory"
+            ? `Reading folder ${path ?? "."}`
+            : name === "search_files"
+              ? pattern
+                ? `Finding files matching ${pattern}`
+                : "Finding files"
+              : name === "search_text"
+                ? query
+                  ? `Searching code for "${truncateText(query, 48)}"`
+                  : "Searching code"
+                : name === "get_cwd"
+                  ? "Checking the working directory"
+                  : `Running ${name}`;
 
   try {
     const parsed = JSON.parse(output) as Record<string, unknown>;
@@ -345,6 +431,7 @@ interface PendingTool {
   parameters: Record<string, unknown>;
   slotIdx: number;
   label?: string;
+  absorbedStatusIdx?: number | null;
 }
 
 interface ThinkState {
@@ -384,6 +471,8 @@ export class LogDeriver {
   private lastStatusSlotIdx: number | null = null;
   private lastStatusMessage = "";
   private nextSlotIdx: number | null = null; // single global replaceable slot
+  private narrativeNextReceived = false;
+  private lastAgentIntent: string | null = null;
 
   // ── Private helpers ────────────────────────────────────────────────────────
 
@@ -397,7 +486,10 @@ export class LogDeriver {
     if (this.slots[idx]) this.slots[idx]!.entry = null;
   }
 
-  private update(idx: number, updater: (entry: LogEntry) => Partial<LogEntry>): void {
+  private update(
+    idx: number,
+    updater: (entry: LogEntry) => Partial<LogEntry>,
+  ): void {
     const slot = this.slots[idx];
     if (!slot?.entry) return;
     slot.entry = { ...slot.entry, ...updater(slot.entry) };
@@ -409,26 +501,25 @@ export class LogDeriver {
    * blocks, so internal markup never flashes in the transcript while streaming.
    */
   private cleanStreamContent(raw: string): string {
-    return raw
+    let s = raw;
+    // Suppress if it looks like a streaming JSON block (orchestrator/internal protocol)
+    if (s.trim().startsWith("{")) return "";
+
+    return s
       .replace(/<tool_call\b[^>]*>[\s\S]*?<\/tool_(?:call|result)>/gi, "")
       .replace(/<think\b[^>]*>[\s\S]*?<\/think>/gi, "")
-      .replace(/<tool_call\b[^>]*>/gi, "")
-      .replace(/<\/tool_(?:call|result)>/gi, "")
-      .replace(/<think\b[^>]*>/gi, "")
-      .replace(/<\/think>/gi, "")
-      .replace(/<tool_call\b[\s\S]*$/gi, "")
-      .replace(/<think\b[\s\S]*$/gi, "")
+      .replace(/<status\b[^>]*>[\s\S]*?<\/status>/gi, "")
+      .replace(/<next\b[^>]*>[\s\S]*?<\/next>/gi, "")
+      .replace(/<\/?(?:tool_call|tool_result|think|status|next)\b[^>]*>/gi, "")
+      .replace(/<\/?(?:tool_call|think|status|next)\b[\s\S]*$/gi, "")
+      .replace(/<\/?[a-z]*$/gi, "")
       .replace(/\n{3,}/g, "\n\n");
   }
 
   private sanitizeNarrationLine(text: string): string {
     const cleaned = text
-      .replace(/<tool_call\b[^>]*>/gi, "")
-      .replace(/<\/tool_call>/gi, "")
-      .replace(/<tool_result\b[^>]*>/gi, "")
-      .replace(/<\/tool_result>/gi, "")
-      .replace(/<think\b[^>]*>/gi, "")
-      .replace(/<\/think>/gi, "")
+      .replace(/<(?:tool_call|tool_result|think|status|next)\b[^>]*>/gi, "")
+      .replace(/<\/(?:tool_call|tool_result|think|status|next)>/gi, "")
       .trim();
 
     if (!cleaned) return "";
@@ -446,10 +537,14 @@ export class LogDeriver {
 
   private stripNarrationProtocol(text: string): string {
     return text
-      .replace(/<tool_call\b[^>]*>[\s\S]*?<\/tool_call>/gi, "\n")
-      .replace(/<tool_result\b[^>]*>[\s\S]*?<\/tool_result>/gi, "\n")
-      .replace(/<tool_call\b[^>]*>[\s\S]*$/gi, "\n")
-      .replace(/<tool_result\b[^>]*>[\s\S]*$/gi, "\n")
+      .replace(
+        /<(?:tool_call|tool_result|think|status|next)\b[^>]*>[\s\S]*?<\/(?:tool_call|tool_result|think|status|next)>/gi,
+        "\n",
+      )
+      .replace(
+        /<(?:tool_call|tool_result|think|status|next)\b[^>]*>[\s\S]*$/gi,
+        "\n",
+      )
       .replace(/^\s*\{[\s\S]*?\}\s*$/gm, "\n")
       .replace(/\n{3,}/g, "\n\n");
   }
@@ -458,7 +553,7 @@ export class LogDeriver {
     for (let i = 0; i < text.length; i++) {
       const ch = text[i];
       if (ch === "\n") return i + 1;
-      if ((ch === "." || ch === "!" || ch === "?")) {
+      if (ch === "." || ch === "!" || ch === "?") {
         const next = text[i + 1];
         if (next === undefined || /\s/.test(next)) return i + 1;
       }
@@ -479,11 +574,17 @@ export class LogDeriver {
     this.narrationStates.delete(agentId);
   }
 
-  private appendNarrationChunk(agentId: string, chunk: string, time: string, eventId: string): void {
+  private appendNarrationChunk(
+    agentId: string,
+    chunk: string,
+    time: string,
+    eventId: string,
+  ): void {
     let remaining = this.stripNarrationProtocol(chunk);
     while (remaining.length > 0) {
       const boundaryIdx = this.findNarrationBoundary(remaining);
-      const piece = boundaryIdx === -1 ? remaining : remaining.slice(0, boundaryIdx);
+      const piece =
+        boundaryIdx === -1 ? remaining : remaining.slice(0, boundaryIdx);
       const rest = boundaryIdx === -1 ? "" : remaining.slice(boundaryIdx);
 
       const existing = this.narrationStates.get(agentId);
@@ -527,11 +628,11 @@ export class LogDeriver {
     const cleaned = cleanAgentResponse(rawSnapshot);
 
     this.evict(slotIdx);
+    this.streamSlotIdx = null;
+    this.streamAgentId = null;
+    this.streamRawBuffer = "";
 
-    if (
-      cleaned &&
-      finalLevel !== "stream"
-    ) {
+    if (cleaned && finalLevel !== "stream") {
       this.push({
         id: existingEntry?.id
           ? `${existingEntry.id}-final`
@@ -551,6 +652,14 @@ export class LogDeriver {
   private finalizeAll(): void {
     const time = fmtTime(Date.now());
     this.flushActiveStream(time, "response");
+
+    // Mark status rows as done so they appear in history if needed, rather than evicting.
+    for (let i = 0; i < this.slots.length; i++) {
+      const entry = this.slots[i]?.entry;
+      if (entry?.level === "status") {
+        this.update(i, () => ({ done: true }));
+      }
+    }
 
     for (const [agentId, state] of this.thinkStates) {
       const full = state.buffer.trim();
@@ -608,10 +717,22 @@ export class LogDeriver {
 
     switch (event.type) {
       case "run_started":
+        this.nextSlotIdx = this.push({
+          id: "next-slot",
+          time,
+          level: "next",
+          message: "",
+          done: false,
+        });
         break;
 
       case "user_message":
-        this.push({ id: `${event.eventId}-user`, time, level: "user", message: event.content });
+        this.push({
+          id: `${event.eventId}-user`,
+          time,
+          level: "user",
+          message: event.content,
+        });
         break;
 
       case "agent_started": {
@@ -635,13 +756,26 @@ export class LogDeriver {
           time,
           level: "model",
           title: `LLM call ${event.turn}`,
-          message: event.summary,
+          message: cleanAgentResponse(event.summary),
           done: false,
         });
         this.pendingModelCalls.set(`${event.agentId}:${event.turn}`, {
           turn: event.turn,
           slotIdx,
         });
+        this.narrativeNextReceived = false;
+        const fallback = cleanAgentResponse(event.summary) || "";
+        if (this.nextSlotIdx !== null) {
+          this.update(this.nextSlotIdx, () => ({ message: fallback, time }));
+        } else {
+          this.nextSlotIdx = this.push({
+            id: "next-slot",
+            time,
+            level: "next",
+            message: fallback,
+            done: false,
+          });
+        }
         break;
       }
 
@@ -651,11 +785,20 @@ export class LogDeriver {
         if (!pending) break;
         this.update(pending.slotIdx, () => ({
           title: `LLM call ${event.turn}`,
-          message: describeModelTurnDone(event.turn, event.summary),
+          message: describeModelTurnDone(
+            event.turn,
+            cleanAgentResponse(event.summary),
+          ),
           ...(event.detail ? { detail: event.detail } : {}),
           done: true,
         }));
         this.pendingModelCalls.delete(key);
+        
+        const summaryMsg = cleanAgentResponse(event.summary) || "";
+        this.lastAgentIntent = summaryMsg;
+        if (this.nextSlotIdx !== null && !this.narrativeNextReceived) {
+          this.update(this.nextSlotIdx, () => ({ message: summaryMsg, time }));
+        }
         break;
       }
 
@@ -663,12 +806,14 @@ export class LogDeriver {
         const existing = this.thinkStates.get(event.agentId);
         if (existing) {
           const buffer = existing.buffer + event.delta;
-          const snippet = buffer.length > 300 ? `…${buffer.slice(-300)}` : buffer;
+          const snippet =
+            buffer.length > 300 ? `…${buffer.slice(-300)}` : buffer;
           this.update(existing.slotIdx, () => ({ message: snippet }));
           this.thinkStates.set(event.agentId, { ...existing, buffer });
         } else {
           const buffer = event.delta;
-          const snippet = buffer.length > 300 ? `…${buffer.slice(-300)}` : buffer;
+          const snippet =
+            buffer.length > 300 ? `…${buffer.slice(-300)}` : buffer;
           const slotIdx = this.push({
             id: `${event.eventId}-think`,
             time,
@@ -691,17 +836,40 @@ export class LogDeriver {
         });
         this.lastStatusSlotIdx = statusSlotIdx;
         this.lastStatusMessage = statusMessage;
+        
+        // Caching this allows the next tool_call_completed to fall back to this status
+        // instead of going completely blank.
+        if (statusMessage) this.lastAgentIntent = statusMessage;
+
+        // Mirror the status to the next slot so it shows as the bottom progress line,
+        // but stay on the agentic 'next' narrative if we've already received one.
+        if (!this.narrativeNextReceived) {
+          const finalMsg = statusMessage || "";
+          if (this.nextSlotIdx !== null) {
+            this.update(this.nextSlotIdx, () => ({ message: finalMsg, time }));
+          } else {
+            this.nextSlotIdx = this.push({
+              id: "next-slot",
+              time,
+              level: "next",
+              message: finalMsg,
+              done: false,
+            });
+          }
+        }
         break;
       }
 
       case "next_update": {
         // Single global slot — update in-place while streaming, push once if new.
-        const msg = event.message.slice(0, 600);
+        const msg = event.message.trim().slice(0, 600);
+        if (!msg) break; // skip empty/whitespace messages
+        this.narrativeNextReceived = true;
         if (this.nextSlotIdx !== null) {
           this.update(this.nextSlotIdx, () => ({ message: msg, time }));
         } else {
           this.nextSlotIdx = this.push({
-            id: `${event.eventId}-next`,
+            id: "next-slot",
             time,
             level: "next",
             message: msg,
@@ -716,21 +884,33 @@ export class LogDeriver {
         this.lastStatusSlotIdx = null;
         this.lastStatusMessage = "";
 
-        // Suppress raw intermediate output only while a tool is actively
-        // running. If the model streams plain narration between tool calls,
-        // keep it visible so the user can follow the step-by-step flow.
-        if (this.pendingTools.size > 0) {
+        // Internal agents (orchestrator, file-picker) speak only in JSON protocol
+        // which should never be streamed live to the user.
+        if (
+          event.agentId === "orchestrator" ||
+          event.agentId === "file-picker"
+        ) {
           break;
         }
 
+        // Only buffer the output invisibly. We intentionally suppress live streaming (SSE)
+        // for intermediate steps so that the terminal displays them in unified blocks instead.
+        // The final user-facing response will be streamed properly via 'response_delta'.
+        this.finalizeThinking(event.agentId);
+        this.streamRawBuffer += event.content;
+        this.streamAgentId = event.agentId;
+        break;
+      }
+
+      case "response_delta": {
+        // This is used ONLY for the final conversational response to the user.
+        // It provides the SSE / 'typing' effect that was suppressed during narration.
+        const time = fmtTime(event.timestamp);
         this.finalizeThinking(event.agentId);
 
-        if (
-          this.streamSlotIdx !== null &&
-          this.streamAgentId !== null &&
-          this.streamAgentId !== event.agentId
-        ) {
-          this.flushActiveStream(time, "response");
+        // Instantly hide the <next> progress line while we stream the final answer
+        if (this.nextSlotIdx !== null) {
+          this.update(this.nextSlotIdx, () => ({ message: "" }));
         }
 
         this.streamRawBuffer += event.content;
@@ -740,9 +920,9 @@ export class LogDeriver {
           this.update(this.streamSlotIdx, () => ({ message: cleanedContent }));
         } else {
           this.streamSlotIdx = this.push({
-            id: `${event.agentId}-stream`,
+            id: `final-response-stream`,
             time,
-            level: "stream",
+            level: "response",
             message: cleanedContent,
           });
           this.streamAgentId = event.agentId;
@@ -753,6 +933,23 @@ export class LogDeriver {
       case "tool_call_started": {
         this.finalizeNarration(event.agentId);
 
+        // Mirror the active tool call to the next slot so the user sees "Calling: read_file",
+        // but ONLY if we haven't already received a more descriptive agentic 'next' narrative.
+        if (!this.narrativeNextReceived) {
+          const toolMsg = `Calling: ${event.name}...`;
+          if (this.nextSlotIdx !== null) {
+            this.update(this.nextSlotIdx, () => ({ message: toolMsg, time }));
+          } else {
+            this.nextSlotIdx = this.push({
+              id: "next-slot",
+              time,
+              level: "next",
+              message: toolMsg,
+              done: false,
+            });
+          }
+        }
+
         // Discard any active stream from intermediate model text before this tool call.
         if (this.streamSlotIdx !== null) {
           this.evict(this.streamSlotIdx);
@@ -761,28 +958,23 @@ export class LogDeriver {
           this.streamRawBuffer = "";
         }
 
-        // If a status message immediately preceded this tool call, absorb its
-        // human-readable label into the bullet and evict the separate status row.
         let bulletLabel = describeToolCallActive(event.name, event.parameters);
+        let absorbedStatusIdx: number | null = null;
         if (this.lastStatusSlotIdx !== null) {
           bulletLabel = this.lastStatusMessage;
-          this.evict(this.lastStatusSlotIdx);
+          absorbedStatusIdx = this.lastStatusSlotIdx;
+          // Keep it for now, so the UI doesn't flicker to empty while the tool runs.
+          // We'll evict it in tool_call_completed.
           this.lastStatusSlotIdx = null;
           this.lastStatusMessage = "";
         }
 
-        const slotIdx = this.push({
-          id: `${event.toolCallId}-bullet`,
-          time,
-          level: "bullet",
-          message: bulletLabel,
-          done: false,
-        });
         this.pendingTools.set(event.toolCallId, {
           name: event.name,
           parameters: event.parameters,
-          slotIdx,
+          slotIdx: -1, // No visible slot yet
           label: bulletLabel,
+          absorbedStatusIdx,
         });
         break;
       }
@@ -791,46 +983,76 @@ export class LogDeriver {
         const pending = this.pendingTools.get(event.toolCallId);
         if (!pending) break;
 
+        // Now that the tool is done, evict the predecessor status row if we absorbed it.
+        if (typeof pending.absorbedStatusIdx === "number") {
+          this.evict(pending.absorbedStatusIdx);
+        }
+
         if (event.error) {
-          this.update(pending.slotIdx, () => ({
+          this.push({
+            id: `${event.eventId}-bullet-failed`,
+            time,
+            level: "bullet",
             message: `${pending.label ?? describeToolCallActive(event.name, event.parameters)} — failed`,
             failed: true,
             done: true,
-          }));
+          });
           this.push({
-            id: `${event.toolCallId}-error`,
+            id: `${event.eventId}-error`,
             time,
             level: "error",
-            message: describeToolError(event.name, event.parameters, event.error),
+            message: describeToolError(
+              event.name,
+              event.parameters,
+              event.error,
+            ),
           });
         } else {
-          const detail = buildToolCallDetail(event.name, event.parameters, event.output);
-          // If we have a human-readable label, append just the count/stats suffix
-          // from describeToolCallDone rather than its full path-based message.
+          const detail = buildToolCallDetail(
+            event.name,
+            event.parameters,
+            event.output,
+          );
           let doneMessage: string;
           if (pending.label) {
-            const pathBased = describeToolCallDone(event.name, event.parameters, event.output);
+            const pathBased = describeToolCallDone(
+              event.name,
+              event.parameters,
+              event.output,
+            );
             const dashIdx = pathBased.indexOf(" — ");
             const suffix = dashIdx !== -1 ? pathBased.slice(dashIdx) : "";
             doneMessage = `${pending.label}${suffix}`;
           } else {
-            doneMessage = describeToolCallDone(event.name, event.parameters, event.output);
+            doneMessage = describeToolCallDone(
+              event.name,
+              event.parameters,
+              event.output,
+            );
           }
-          this.update(pending.slotIdx, () => ({
+          this.push({
+            id: `${event.eventId}-bullet`,
+            time,
+            level: "bullet",
             message: doneMessage,
             done: true,
             ...(detail !== undefined ? { detail } : {}),
-          }));
+          });
         }
 
         this.pendingTools.delete(event.toolCallId);
+
+        // Clear progress line when tool finishes ONLY if it was a "Calling..." status.
+        // Don't clear it if it was a narrative <next> update.
+        if (this.nextSlotIdx !== null && !this.narrativeNextReceived) {
+          this.update(this.nextSlotIdx, () => ({ message: this.lastAgentIntent || "", time }));
+        }
         break;
       }
 
       case "agent_completed": {
         this.finalizeNarration(event.agentId);
         this.finalizeThinking(event.agentId);
-
 
         const section = this.sections.get(event.agentId);
         if (section) {
@@ -857,14 +1079,22 @@ export class LogDeriver {
 
       case "run_completed": {
         if (this.streamSlotIdx !== null) {
-          this.flushActiveStream(time, "response");
+          this.update(this.streamSlotIdx, () => ({ done: true }));
+          this.streamSlotIdx = null; // Detach so it's not flushed again
         } else {
           // Only fall back to finalOutput if no response was already streamed live
-          const hasResponse = this.slots.some((s) => s.entry?.level === "response");
+          const hasResponse = this.slots.some(
+            (s) => s.entry?.level === "response",
+          );
           if (!hasResponse) {
             const cleaned = cleanAgentResponse(event.finalOutput.trim());
             if (cleaned) {
-              this.push({ id: `${event.eventId}-response`, time, level: "response", message: cleaned });
+              this.push({
+                id: `${event.eventId}-response`,
+                time,
+                level: "response",
+                message: cleaned,
+              });
             }
           }
         }
@@ -886,7 +1116,12 @@ export class LogDeriver {
 
       case "run_failed":
         this.finalizeAll();
-        this.push({ id: `${event.eventId}-error`, time, level: "error", message: event.message });
+        this.push({
+          id: `${event.eventId}-error`,
+          time,
+          level: "error",
+          message: event.message,
+        });
         break;
 
       case "run_interrupted":
@@ -918,13 +1153,16 @@ export class LogDeriver {
     this.lastStatusSlotIdx = null;
     this.lastStatusMessage = "";
     this.nextSlotIdx = null;
+    this.narrativeNextReceived = false;
   }
 
   getLog(): LogEntry[] {
     return this.slots.flatMap((slot) => (slot.entry ? [slot.entry] : []));
   }
 
-  lookupPendingToolParams(toolCallId: string): Record<string, unknown> | undefined {
+  lookupPendingToolParams(
+    toolCallId: string,
+  ): Record<string, unknown> | undefined {
     return this.pendingTools.get(toolCallId)?.parameters;
   }
 }

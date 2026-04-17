@@ -6,11 +6,15 @@
  * type differs (LogEntry vs MockTranscriptItem).
  */
 import type { DiffEntry, LogEntry } from "./types.ts";
-import type { TranscriptIndicator, TranscriptRow, TranscriptSegment } from "./transcript.ts";
+import type {
+  TranscriptIndicator,
+  TranscriptRow,
+  TranscriptSegment,
+} from "./transcript.ts";
 
 const TIMESTAMP_WIDTH = 8;
 const BLANK_TIMESTAMP = " ".repeat(TIMESTAMP_WIDTH);
-const DIFF_CONTEXT = 2;   // context lines shown either side of a change
+const DIFF_CONTEXT = 2; // context lines shown either side of a change
 const MAX_DIFF_SLOTS = 12; // max rendered lines per diff block (excl. header)
 const FORMATTER_CACHE_LIMIT = 2000;
 
@@ -87,7 +91,10 @@ function pushHighlightedText(
   let lastIndex = 0;
   let match: RegExpExecArray | null;
 
-  for (SPECIAL_TOKEN_PATTERN.lastIndex = 0; (match = SPECIAL_TOKEN_PATTERN.exec(text)) !== null;) {
+  for (
+    SPECIAL_TOKEN_PATTERN.lastIndex = 0;
+    (match = SPECIAL_TOKEN_PATTERN.exec(text)) !== null;
+  ) {
     if (match.index > lastIndex) {
       segments.push(seg(text.slice(lastIndex, match.index), tone, opts));
     }
@@ -129,22 +136,32 @@ function parseInline(
     while ((match = pattern.exec(text)) !== null) {
       if (match.index > lastIndex) {
         if (highlightTokens) {
-          pushHighlightedText(segments, text.slice(lastIndex, match.index), tone, opts);
+          pushHighlightedText(
+            segments,
+            text.slice(lastIndex, match.index),
+            tone,
+            opts,
+          );
         } else {
           segments.push(seg(text.slice(lastIndex, match.index), tone, opts));
         }
       }
       if (match[0].startsWith("***")) {
         const boldItalicOpts = { ...opts, bold: true, italic: true };
-        const boldItalicTone: TranscriptSegment["tone"] = "heading";
+        const boldItalicTone: TranscriptSegment["tone"] = tone;
         if (highlightTokens) {
-          pushHighlightedText(segments, match[2] ?? "", boldItalicTone, boldItalicOpts);
+          pushHighlightedText(
+            segments,
+            match[2] ?? "",
+            boldItalicTone,
+            boldItalicOpts,
+          );
         } else {
           segments.push(seg(match[2] ?? "", boldItalicTone, boldItalicOpts));
         }
       } else if (match[0].startsWith("**")) {
         const boldOpts = { ...opts, bold: true };
-        const boldTone: TranscriptSegment["tone"] = "heading";
+        const boldTone: TranscriptSegment["tone"] = tone;
         if (highlightTokens) {
           pushHighlightedText(segments, match[3] ?? "", boldTone, boldOpts);
         } else {
@@ -152,7 +169,7 @@ function parseInline(
         }
       } else if (match[0].startsWith("*")) {
         const italicOpts = { ...opts, italic: true };
-        const italicTone: TranscriptSegment["tone"] = "accent";
+        const italicTone: TranscriptSegment["tone"] = tone;
         if (highlightTokens) {
           pushHighlightedText(segments, match[4] ?? "", italicTone, italicOpts);
         } else {
@@ -196,7 +213,10 @@ function wrapText(text: string, maxWidth: number): string[] {
       const words = para.split(" ");
       let current = "";
       for (const word of words) {
-        if (!word) { current += " "; continue; }
+        if (!word) {
+          current += " ";
+          continue;
+        }
         if (current.length === 0) {
           current = word;
         } else if (current.length + 1 + word.length <= safeWidth) {
@@ -219,10 +239,7 @@ function renderMarkdownLine(line: string): TranscriptSegment[] {
     if (headingMatch) {
       const level = headingMatch[1]?.length ?? 1;
       const marker =
-        level === 1 ? "◆ " :
-        level === 2 ? "◇ " :
-        level === 3 ? "• " :
-        "◦ ";
+        level === 1 ? "◆ " : level === 2 ? "◇ " : level === 3 ? "• " : "◦ ";
       return [
         seg(marker, "heading", { bold: true }),
         ...parseInline(headingMatch[2] ?? "", "heading", { bold: true }),
@@ -230,10 +247,15 @@ function renderMarkdownLine(line: string): TranscriptSegment[] {
     }
 
     const bulletMatch = /^[•\-\*]\s+(.+)$/.exec(line);
-    if (bulletMatch) return [seg("• ", "muted"), ...parseInline(bulletMatch[1] ?? "")];
+    if (bulletMatch)
+      return [seg("• ", "muted"), ...parseInline(bulletMatch[1] ?? "")];
 
     const numberedMatch = /^(\d+)\.\s+(.+)$/.exec(line);
-    if (numberedMatch) return [seg(`${numberedMatch[1]}. `, "muted"), ...parseInline(numberedMatch[2] ?? "")];
+    if (numberedMatch)
+      return [
+        seg(`${numberedMatch[1]}. `, "muted"),
+        ...parseInline(numberedMatch[2] ?? ""),
+      ];
 
     if (line.startsWith("✓ ") || line.startsWith("- [x] ")) {
       const text = line.replace(/^(✓ |- \[x\] )/, "");
@@ -265,9 +287,19 @@ function renderUser(entry: LogEntry, width: number): TranscriptRow[] {
       ? makeRow(
           `${entry.id}:0`,
           [seg(entry.time, "muted"), seg("  › ", "accent")],
-          parseInline(line, "default", undefined, false).map((s) => ({ ...s, bold: true })),
+          parseInline(line, "default", undefined, false).map((s) => ({
+            ...s,
+            bold: true,
+          })),
         )
-      : makeRow(`${entry.id}:${i}`, CONTINUATION_BEFORE, parseInline(line, "default", undefined, false).map((s) => ({ ...s, bold: true }))),
+      : makeRow(
+          `${entry.id}:${i}`,
+          CONTINUATION_BEFORE,
+          parseInline(line, "default", undefined, false).map((s) => ({
+            ...s,
+            bold: true,
+          })),
+        ),
   );
 }
 
@@ -283,7 +315,12 @@ function renderSection(entry: LogEntry, _width: number): TranscriptRow[] {
       [seg(entry.time, "muted"), seg("  ", "muted")],
       [
         seg(" ", "muted"),
-        ...parseInline(entry.message, active ? "heading" : "muted", { bold: active }, false),
+        ...parseInline(
+          entry.message,
+          active ? "heading" : "muted",
+          { bold: active },
+          false,
+        ),
       ],
       indicator,
     ),
@@ -312,23 +349,27 @@ function renderModel(entry: LogEntry, width: number): TranscriptRow[] {
   const firstLine = `${title}${entry.message}`.trim();
   const prefixWidth = TIMESTAMP_WIDTH + 7;
   const contentWidth = Math.max(8, width - prefixWidth);
-  const rows: TranscriptRow[] = wrapText(firstLine, contentWidth).map((line, i) =>
-    i === 0
-      ? makeRow(
-          `${entry.id}:title:${i}`,
-          [seg(entry.time, "muted"), seg("  ", "muted")],
-          [seg(" ", "muted"), ...parseInline(line, tone, undefined, false)],
-          indicator,
-        )
-      : makeRow(
-          `${entry.id}:title:${i}`,
-          CONTINUATION_BEFORE,
-          parseInline(line, tone, undefined, false),
-        ),
+  const rows: TranscriptRow[] = wrapText(firstLine, contentWidth).map(
+    (line, i) =>
+      i === 0
+        ? makeRow(
+            `${entry.id}:title:${i}`,
+            [seg(entry.time, "muted"), seg("  ", "muted")],
+            [seg(" ", "muted"), ...parseInline(line, tone, undefined, false)],
+            indicator,
+          )
+        : makeRow(
+            `${entry.id}:title:${i}`,
+            CONTINUATION_BEFORE,
+            parseInline(line, tone, undefined, false),
+          ),
   );
 
   if (entry.detail) {
-    const detailLines = wrapText(entry.detail, Math.max(8, width - (TIMESTAMP_WIDTH + 7)));
+    const detailLines = wrapText(
+      entry.detail,
+      Math.max(8, width - (TIMESTAMP_WIDTH + 7)),
+    );
     for (let i = 0; i < detailLines.length; i++) {
       rows.push(
         makeRow(
@@ -354,13 +395,28 @@ function renderNarration(entry: LogEntry, width: number): TranscriptRow[] {
       ? makeRow(
           `${entry.id}:${i}`,
           [seg(entry.time, "muted"), seg("  ", "muted")],
-          [seg(" ", "muted"), ...parseInline(line, active ? "default" : "muted", active ? { bold: true } : undefined, false)],
-          active ? spinnerIndicator("cyan") : iconIndicator("·", "gray", { dim: true }),
+          [
+            seg(" ", "muted"),
+            ...parseInline(
+              line,
+              active ? "default" : "muted",
+              active ? { bold: true } : undefined,
+              false,
+            ),
+          ],
+          active
+            ? spinnerIndicator("cyan")
+            : iconIndicator("·", "gray", { dim: true }),
         )
       : makeRow(
           `${entry.id}:${i}`,
           CONTINUATION_BEFORE,
-          parseInline(line, active ? "default" : "muted", active ? { bold: true } : { dim: true }, false),
+          parseInline(
+            line,
+            active ? "default" : "muted",
+            active ? { bold: true } : { dim: true },
+            false,
+          ),
         ),
   );
 }
@@ -436,7 +492,11 @@ function renderSimple(
           [seg(" ", "muted"), ...parseInline(line, msgTone, undefined, false)],
           iconIndicator(iconChar, iconColor),
         )
-      : makeRow(`${entry.id}:${i}`, CONTINUATION_BEFORE, parseInline(line, msgTone, undefined, false)),
+      : makeRow(
+          `${entry.id}:${i}`,
+          CONTINUATION_BEFORE,
+          parseInline(line, msgTone, undefined, false),
+        ),
   );
 }
 
@@ -468,6 +528,7 @@ function renderNext(entry: LogEntry, width: number): TranscriptRow[] {
   // Split "Label: rest of message" — bold the label prefix if present
   const labelMatch = /^([A-Za-z][A-Za-z ]{0,14}):\s*(.*)$/s.exec(entry.message);
   const displayMessage = entry.message;
+  if (!displayMessage) return [];
 
   const lines = wrapText(displayMessage, contentWidth);
 
@@ -480,12 +541,15 @@ function renderNext(entry: LogEntry, width: number): TranscriptRow[] {
       const wrapped = wrapText(firstRest, contentWidth - label.length - 2);
       return [
         seg(" ", "muted"),
-        seg(`${label}:`, "accent", { bold: true }),
+        seg(`${label}:`, "default", { bold: true }),
         seg(" ", "muted"),
         ...parseInline(wrapped[0] ?? "", "default", undefined, false),
       ];
     }
-    return [seg(" ", "muted"), ...parseInline(first, "default", undefined, false)];
+    return [
+      seg(" ", "muted"),
+      ...parseInline(first, "default", undefined, false),
+    ];
   };
 
   const rows: TranscriptRow[] = [
@@ -528,8 +592,13 @@ function renderThink(entry: LogEntry, width: number): TranscriptRow[] {
       ? makeRow(
           `${entry.id}:${i}`,
           [seg(entry.time, "muted"), seg("  ", "muted")],
-          [seg(" ", "muted"), ...parseInline(line, "muted", { dim: true }, false)],
-          active ? spinnerIndicator("gray") : iconIndicator("·", "gray", { dim: true }),
+          [
+            seg(" ", "muted"),
+            ...parseInline(line, "muted", { dim: true }, false),
+          ],
+          active
+            ? spinnerIndicator("gray")
+            : iconIndicator("·", "gray", { dim: true }),
         )
       : makeRow(
           `${entry.id}:${i}`,
@@ -553,7 +622,10 @@ function renderDiff(entry: LogEntry, width: number): TranscriptRow[] {
         seg(" ", "muted"),
         seg(`-${diff.removed}`, "danger"),
       ]
-    : [seg(" ", "muted"), ...parseInline(entry.message, "muted", undefined, false)];
+    : [
+        seg(" ", "muted"),
+        ...parseInline(entry.message, "muted", undefined, false),
+      ];
 
   rows.push(
     makeRow(
@@ -577,7 +649,11 @@ function renderDiff(entry: LogEntry, width: number): TranscriptRow[] {
   const nearChange = new Set<number>();
   for (let i = 0; i < lines.length; i++) {
     if (lines[i]!.type !== "context") {
-      for (let j = Math.max(0, i - DIFF_CONTEXT); j <= Math.min(lines.length - 1, i + DIFF_CONTEXT); j++) {
+      for (
+        let j = Math.max(0, i - DIFF_CONTEXT);
+        j <= Math.min(lines.length - 1, i + DIFF_CONTEXT);
+        j++
+      ) {
         nearChange.add(j);
       }
     }
@@ -607,7 +683,10 @@ function renderDiff(entry: LogEntry, width: number): TranscriptRow[] {
       rows.push(
         makeRow(
           `${entry.id}:gap:${i}`,
-          [seg(BLANK_TIMESTAMP, "muted"), seg("   ···   ", "muted", { dim: true })],
+          [
+            seg(BLANK_TIMESTAMP, "muted"),
+            seg("   ···   ", "muted", { dim: true }),
+          ],
           [],
         ),
       );
@@ -625,7 +704,10 @@ function renderDiff(entry: LogEntry, width: number): TranscriptRow[] {
       rows.push(
         makeRow(
           `${entry.id}:line:${i}`,
-          [seg(BLANK_TIMESTAMP, "muted"), seg(`  ${lineNoStr} + `, "success", { dim: true })],
+          [
+            seg(BLANK_TIMESTAMP, "muted"),
+            seg(`  ${lineNoStr} + `, "success", { dim: true }),
+          ],
           [seg(raw, "success")],
         ),
       );
@@ -633,7 +715,10 @@ function renderDiff(entry: LogEntry, width: number): TranscriptRow[] {
       rows.push(
         makeRow(
           `${entry.id}:line:${i}`,
-          [seg(BLANK_TIMESTAMP, "muted"), seg(`  ${lineNoStr} - `, "danger", { dim: true })],
+          [
+            seg(BLANK_TIMESTAMP, "muted"),
+            seg(`  ${lineNoStr} - `, "danger", { dim: true }),
+          ],
           [seg(raw, "danger")],
         ),
       );
@@ -641,7 +726,10 @@ function renderDiff(entry: LogEntry, width: number): TranscriptRow[] {
       rows.push(
         makeRow(
           `${entry.id}:line:${i}`,
-          [seg(BLANK_TIMESTAMP, "muted"), seg(`  ${lineNoStr}   `, "muted", { dim: true })],
+          [
+            seg(BLANK_TIMESTAMP, "muted"),
+            seg(`  ${lineNoStr}   `, "muted", { dim: true }),
+          ],
           [seg(raw, "muted", { dim: true })],
         ),
       );
@@ -680,7 +768,10 @@ function renderResponse(entry: LogEntry, width: number): TranscriptRow[] {
         makeRow(
           `${entry.id}:responding`,
           [seg(entry.time, "muted"), seg("  ", "muted")],
-          [seg(" ", "muted"), seg("Responding…", "muted", { italic: true, dim: true })],
+          [
+            seg(" ", "muted"),
+            seg("Responding…", "muted", { italic: true, dim: true }),
+          ],
           indicator,
         ),
       );
@@ -762,6 +853,7 @@ function renderResponse(entry: LogEntry, width: number): TranscriptRow[] {
 // ---------------------------------------------------------------------------
 
 const MAX_VISIBLE_BULLETS = 3;
+const MAX_VISIBLE_STATUS = 3;
 const ERROR_BULLET_TTL = 3; // hide an error once this many bullets have followed it
 
 function computeVisibleErrorIds(log: LogEntry[]): Set<string> {
@@ -770,7 +862,8 @@ function computeVisibleErrorIds(log: LogEntry[]): Set<string> {
   for (let i = log.length - 1; i >= 0; i--) {
     const e = log[i]!;
     if (e.level === "bullet") bulletsAfter++;
-    else if (e.level === "error" && bulletsAfter < ERROR_BULLET_TTL) visible.add(e.id);
+    else if (e.level === "error" && bulletsAfter < ERROR_BULLET_TTL)
+      visible.add(e.id);
   }
   return visible;
 }
@@ -795,7 +888,13 @@ export function formatLogTranscriptRows(
   log: LogEntry[],
   width: number,
 ): TranscriptRow[] {
-  const visibleBulletIds = computeVisibleIds(log, "bullet", MAX_VISIBLE_BULLETS);
+  const visibleBulletIds = computeVisibleIds(
+    log,
+    "bullet",
+    MAX_VISIBLE_BULLETS,
+  );
+  const visibleStatusIds = computeVisibleIds(log, "status", MAX_VISIBLE_STATUS);
+  const visibleOkIds = computeVisibleIds(log, "ok", MAX_VISIBLE_BULLETS);
   const visibleErrorIds = computeVisibleErrorIds(log);
 
   // Build bullet→section map and find the last visible bullet per section.
@@ -813,16 +912,9 @@ export function formatLogTranscriptRows(
       bulletSectionMap.set(entry.id, lastSectionId);
     }
   }
-  // Track the last visible bullet per section by scanning log order.
+  // DEPRECATED: Deferred rendering was causing out-of-order logs.
+  const deferredSectionIds = new Set<string>();
   const lastVisibleBulletPerSection = new Map<string, string>();
-  for (const entry of log) {
-    if (entry.level !== "bullet") continue;
-    if (!visibleBulletIds.has(entry.id)) continue;
-
-    const sid = bulletSectionMap.get(entry.id);
-    if (sid) lastVisibleBulletPerSection.set(sid, entry.id);
-  }
-  const deferredSectionIds = new Set(lastVisibleBulletPerSection.keys());
 
   const rows: TranscriptRow[] = [];
   let renderedEntryCount = 0;
@@ -855,7 +947,9 @@ export function formatLogTranscriptRows(
         break;
 
       case "section":
-        if (deferredSectionIds.has(entry.id)) break; // rendered after last visible bullet
+        // Keep active section headings visible immediately; defer only completed
+        // sections that have visible bullets.
+        if (deferredSectionIds.has(entry.id)) break;
         pushRendered(entry, renderSection(entry, width));
         renderedSectionIds.add(entry.id);
         break;
@@ -867,17 +961,14 @@ export function formatLogTranscriptRows(
         break;
 
       case "status":
-        pushRendered(entry, renderStatus(entry, width));
+        if (visibleStatusIds.has(entry.id)) {
+          pushRendered(entry, renderStatus(entry, width));
+        }
         break;
 
       case "bullet":
         if (visibleBulletIds.has(entry.id)) {
           pushRendered(entry, renderBullet(entry, width));
-          // If this is the last visible bullet from its section, render the section now
-          const sid = bulletSectionMap.get(entry.id);
-          if (sid && lastVisibleBulletPerSection.get(sid) === entry.id) {
-            renderDeferredSection(sid);
-          }
         }
         break;
 
@@ -886,7 +977,12 @@ export function formatLogTranscriptRows(
         break;
 
       case "ok":
-        pushRendered(entry, renderSimple(entry, "✓", "green", "default", width));
+        if (visibleOkIds.has(entry.id)) {
+          pushRendered(
+            entry,
+            renderSimple(entry, "✓", "green", "default", width),
+          );
+        }
         break;
 
       case "error":

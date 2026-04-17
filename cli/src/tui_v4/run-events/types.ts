@@ -92,6 +92,15 @@ export type RunEvent =
       content: string;
     }
   | {
+      type: "response_delta";
+      eventId: string;
+      seq: number;
+      runId: string;
+      timestamp: number;
+      agentId: string;
+      content: string;
+    }
+  | {
       type: "tool_call_started";
       eventId: string;
       seq: number;

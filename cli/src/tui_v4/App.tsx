@@ -34,7 +34,11 @@ function copyToClipboard(text: string): boolean {
       ? [["pbcopy"]]
       : process.platform === "win32"
         ? [["clip"]]
-        : [["wl-copy"], ["xclip", "-selection", "clipboard"], ["xsel", "--clipboard", "--input"]];
+        : [
+            ["wl-copy"],
+            ["xclip", "-selection", "clipboard"],
+            ["xsel", "--clipboard", "--input"],
+          ];
 
   for (const cmd of commands) {
     const proc = Bun.spawnSync({
@@ -64,7 +68,9 @@ export function App() {
       setTermHeight(stdout.rows);
     };
     stdout.on("resize", onResize);
-    return () => { stdout.off("resize", onResize); };
+    return () => {
+      stdout.off("resize", onResize);
+    };
   }, [stdout]);
 
   // ─── Agent runtime ────────────────────────────────────────────────────────
@@ -95,14 +101,18 @@ export function App() {
       const finished = logRef.current;
       if (finished.length > 0) {
         setCumulativeLog((prev) => {
-          const sep: LogEntry[] = prev.length > 0
-            ? [{
-                id: `divider-${Date.now()}`,
-                time: finished[0]?.time ?? "",
-                level: "info" as const,
-                message: "──────────────────────────────────────────────────",
-              }]
-            : [];
+          const sep: LogEntry[] =
+            prev.length > 0
+              ? [
+                  {
+                    id: `divider-${Date.now()}`,
+                    time: finished[0]?.time ?? "",
+                    level: "info" as const,
+                    message:
+                      "──────────────────────────────────────────────────",
+                  },
+                ]
+              : [];
           return [...prev, ...sep, ...finished];
         });
         clearLog();
@@ -126,7 +136,8 @@ export function App() {
   // ─── Input state ──────────────────────────────────────────────────────────
   const [inputValue, setInputValue] = useState("");
   const [selectedSuggestion, setSelectedSuggestion] = useState(0);
-  const [interactionMode, setInteractionMode] = useState<InteractionMode>("scroll");
+  const [interactionMode, setInteractionMode] =
+    useState<InteractionMode>("scroll");
 
   const suggestions = useMemo(
     () => getSlashSuggestions(inputValue, savedChats),
@@ -175,7 +186,9 @@ export function App() {
           {
             id: `copy-${Date.now()}`,
             time: new Date().toTimeString().slice(0, 8),
-            level: message.startsWith("Copied") ? ("ok" as const) : ("error" as const),
+            level: message.startsWith("Copied")
+              ? ("ok" as const)
+              : ("error" as const),
             message,
           },
         ]);
@@ -210,20 +223,34 @@ export function App() {
   const suggestionsHeight = suggestions.length > 0 ? suggestions.length + 3 : 0;
   const chromeHeight = 3;
   const composerHeight = 5 + suggestionsHeight; // 4 composer + 1 padding above it
-  const transcriptHeight = Math.max(8, termHeight - chromeHeight - composerHeight);
+  const transcriptHeight = Math.max(
+    8,
+    termHeight - chromeHeight - composerHeight - 1,
+  );
   const scrollViewportHeight = Math.max(1, transcriptHeight);
-  const maxScrollOffset = Math.max(0, transcriptRows.length - scrollViewportHeight);
+  const maxScrollOffset = Math.max(
+    0,
+    transcriptRows.length - scrollViewportHeight,
+  );
   const pageScrollAmount = Math.max(1, Math.floor(scrollViewportHeight * 0.8));
   maxScrollOffsetRef.current = maxScrollOffset;
 
   // Bump offset when new rows arrive while user is scrolled up
   useEffect(() => {
     const added = transcriptRows.length - prevRowCountRef.current;
-    if (added > 0 && scrollOffset > 0) {
+    if (!busy && added > 0 && scrollOffset > 0) {
       setScrollOffset((c) => Math.min(maxScrollOffset, c + added));
     }
     prevRowCountRef.current = transcriptRows.length;
-  }, [maxScrollOffset, scrollOffset, transcriptRows.length]);
+  }, [busy, maxScrollOffset, scrollOffset, transcriptRows.length]);
+
+  // While a run is active, always follow the live tail so status/next rows stay visible.
+  useEffect(() => {
+    if (!busy) return;
+    if (scrollOffset !== 0) {
+      setScrollOffset(0);
+    }
+  }, [busy, scrollOffset, transcriptRows.length]);
 
   // Clamp offset when content shrinks
   useEffect(() => {
@@ -240,7 +267,9 @@ export function App() {
   const handleMouseScroll = useCallback((direction: "up" | "down") => {
     lastMouseEventRef.current = Date.now();
     if (direction === "up") {
-      setScrollOffset((current) => Math.min(maxScrollOffsetRef.current, current + MOUSE_SCROLL_LINES));
+      setScrollOffset((current) =>
+        Math.min(maxScrollOffsetRef.current, current + MOUSE_SCROLL_LINES),
+      );
     } else {
       setScrollOffset((current) => Math.max(0, current - MOUSE_SCROLL_LINES));
     }
@@ -320,8 +349,7 @@ export function App() {
   }, [suggestions, selectedSuggestion, resume, handleCommandV4]);
 
   // ─── Keyboard handler ─────────────────────────────────────────────────────
-  const canKeyboardScroll =
-    suggestions.length === 0 && inputValue.length === 0;
+  const canKeyboardScroll = suggestions.length === 0 && inputValue.length === 0;
 
   useInput((input, key) => {
     if (input === "\x1bOQ" || input === "\x1b[12~") {
@@ -344,7 +372,9 @@ export function App() {
     // Suggestions navigation
     if (key.upArrow) {
       if (suggestions.length > 0) {
-        setSelectedSuggestion((c) => (c === 0 ? suggestions.length - 1 : c - 1));
+        setSelectedSuggestion((c) =>
+          c === 0 ? suggestions.length - 1 : c - 1,
+        );
       } else if (canKeyboardScroll) {
         setScrollOffset((c) => Math.min(maxScrollOffset, c + 1));
       }
@@ -353,7 +383,9 @@ export function App() {
 
     if (key.downArrow) {
       if (suggestions.length > 0) {
-        setSelectedSuggestion((c) => (c === suggestions.length - 1 ? 0 : c + 1));
+        setSelectedSuggestion((c) =>
+          c === suggestions.length - 1 ? 0 : c + 1,
+        );
       } else if (canKeyboardScroll) {
         setScrollOffset((c) => Math.max(0, c - 1));
       }
@@ -433,8 +465,16 @@ export function App() {
     }
 
     if (
-      key.leftArrow || key.rightArrow || key.upArrow || key.downArrow ||
-      key.pageUp || key.pageDown || key.home || key.end || key.delete || key.tab
+      key.leftArrow ||
+      key.rightArrow ||
+      key.upArrow ||
+      key.downArrow ||
+      key.pageUp ||
+      key.pageDown ||
+      key.home ||
+      key.end ||
+      key.delete ||
+      key.tab
     ) {
       return;
     }

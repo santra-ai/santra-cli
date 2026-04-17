@@ -36,7 +36,10 @@ function makeId(): string {
 
 type LiveStreamMode = "text" | "think" | "status" | "next";
 
-function stripTrailingPartialTag(text: string, tag: string): {
+function stripTrailingPartialTag(
+  text: string,
+  tag: string,
+): {
   safe: string;
   pending: string;
 } {
@@ -194,161 +197,219 @@ export default function useAgent(): UseAgentReturn {
     } as T & { eventId: string; seq: number; runId: string; timestamp: number };
   }
 
-  const handleRealtimeDelta = useCallback((rawChunk: string) => {
-    const normalizedChunk = rawChunk
-      .replace(/<thinking>/gi, "<think>")
-      .replace(/<\/thinking>/gi, "</think>")
-      .replace(/<step>/gi, "<status>")
-      .replace(/<\/step>/gi, "</status>");
+  const handleRealtimeDelta = useCallback(
+    (rawChunk: string) => {
+      const normalizedChunk = rawChunk
+        .replace(/<thinking\b[^>]*>/gi, "<think>")
+        .replace(/<\/thinking\s*>/gi, "</think>")
+        .replace(/<think\b[^>]*>/gi, "<think>")
+        .replace(/<\/think\s*>/gi, "</think>")
+        .replace(/<step\b[^>]*>/gi, "<status>")
+        .replace(/<\/step\s*>/gi, "</status>")
+        .replace(/<heading\b[^>]*>/gi, "<status>")
+        .replace(/<\/heading\s*>/gi, "</status>")
+        .replace(/<status\b[^>]*>/gi, "<status>")
+        .replace(/<\/status\s*>/gi, "</status>")
+        .replace(/<next\b[^>]*>/gi, "<next>")
+        .replace(/<\/next\s*>/gi, "</next>");
 
-    let remaining = liveStreamPendingRef.current + normalizedChunk;
-    liveStreamPendingRef.current = "";
+      let remaining = liveStreamPendingRef.current + normalizedChunk;
+      liveStreamPendingRef.current = "";
 
-    while (remaining.length > 0) {
-      if (liveStreamModeRef.current === "text") {
-        const thinkIdx = remaining.indexOf("<think>");
-        const statusIdx = remaining.indexOf("<status>");
-        const nextTagIdx = remaining.indexOf("<next>");
-        const firstTag = Math.min(
-          thinkIdx === -1 ? Infinity : thinkIdx,
-          statusIdx === -1 ? Infinity : statusIdx,
-          nextTagIdx === -1 ? Infinity : nextTagIdx,
-        );
-        if (firstTag === Infinity) {
-          const partialGuard = ["<think>", "<status>", "<next>"].find((t) =>
-            remaining.includes(t.slice(0, 3)),
-          ) ?? "<think>";
-          const { safe, pending } = stripTrailingPartialTag(remaining, partialGuard);
-          liveStreamPendingRef.current = pending;
-          if (safe) {
+      while (remaining.length > 0) {
+        if (liveStreamModeRef.current === "text") {
+          const thinkIdx = remaining.indexOf("<think>");
+          const statusIdx = remaining.indexOf("<status>");
+          const nextTagIdx = remaining.indexOf("<next>");
+          const firstTag = Math.min(
+            thinkIdx === -1 ? Infinity : thinkIdx,
+            statusIdx === -1 ? Infinity : statusIdx,
+            nextTagIdx === -1 ? Infinity : nextTagIdx,
+          );
+          if (firstTag === Infinity) {
+            const partialGuard =
+              ["<think>", "<status>", "<next>"].find((t) =>
+                remaining.includes(t.slice(0, 3)),
+              ) ?? "<think>";
+            const { safe, pending } = stripTrailingPartialTag(
+              remaining,
+              partialGuard,
+            );
+            liveStreamPendingRef.current = pending;
+            if (safe) {
+              appendEvent(
+                makeEvent({
+                  type: "text_delta",
+                  agentId:
+                    activeAgentIdRef.current === "unknown"
+                      ? "executor"
+                      : activeAgentIdRef.current,
+                  content: safe,
+                }),
+              );
+            }
+            break;
+          }
+
+          const visible = remaining.slice(0, firstTag);
+          if (visible) {
+            const plainNextMatch = /^\s*(next|working)\s*:\s*([\s\S]+)$/i.exec(
+              visible.trim(),
+            );
+            if (plainNextMatch) {
+              const label = plainNextMatch[1] ?? "Next";
+              const rest = (plainNextMatch[2] ?? "").trim();
+              const normalized =
+                `${label.charAt(0).toUpperCase()}${label.slice(1).toLowerCase()}: ${rest}`.trim();
+              appendEvent(
+                makeEvent({
+                  type: "next_update",
+                  agentId:
+                    activeAgentIdRef.current === "unknown"
+                      ? "executor"
+                      : activeAgentIdRef.current,
+                  message: normalized,
+                }),
+              );
+              remaining = remaining.slice(firstTag);
+              continue;
+            }
+
             appendEvent(
               makeEvent({
                 type: "text_delta",
-                agentId: activeAgentIdRef.current === "unknown"
-                  ? "executor"
-                  : activeAgentIdRef.current,
-                content: safe,
+                agentId:
+                  activeAgentIdRef.current === "unknown"
+                    ? "executor"
+                    : activeAgentIdRef.current,
+                content: visible,
+              }),
+            );
+          }
+
+          if (firstTag === thinkIdx) {
+            remaining = remaining.slice(thinkIdx + "<think>".length);
+            liveStreamModeRef.current = "think";
+          } else if (firstTag === statusIdx) {
+            remaining = remaining.slice(statusIdx + "<status>".length);
+            liveStreamModeRef.current = "status";
+            liveStatusBufferRef.current = "";
+          } else {
+            remaining = remaining.slice(nextTagIdx + "<next>".length);
+            liveStreamModeRef.current = "next";
+            liveNextBufferRef.current = "";
+          }
+          continue;
+        }
+
+        if (liveStreamModeRef.current === "status") {
+          const closeIdx = remaining.indexOf("</status>");
+          if (closeIdx === -1) {
+            liveStatusBufferRef.current += remaining;
+            liveStreamPendingRef.current = "";
+            break;
+          }
+
+          const status =
+            `${liveStatusBufferRef.current}${remaining.slice(0, closeIdx)}`.trim();
+          if (status) {
+            appendEvent(
+              makeEvent({
+                type: "status_update",
+                agentId:
+                  activeAgentIdRef.current === "unknown"
+                    ? "executor"
+                    : activeAgentIdRef.current,
+                message: status,
+              }),
+            );
+          }
+          liveStatusBufferRef.current = "";
+          remaining = remaining.slice(closeIdx + "</status>".length);
+          liveStreamModeRef.current = "text";
+          continue;
+        }
+
+        if (liveStreamModeRef.current === "next") {
+          const closeIdx = remaining.indexOf("</next>");
+          const agentId =
+            activeAgentIdRef.current === "unknown"
+              ? "executor"
+              : activeAgentIdRef.current;
+
+          if (closeIdx === -1) {
+            liveNextBufferRef.current += remaining;
+            // Stream partial update so the line appears live
+            if (liveNextBufferRef.current.trim()) {
+              appendEvent(
+                makeEvent({
+                  type: "next_update",
+                  agentId,
+                  message: liveNextBufferRef.current,
+                }),
+              );
+            }
+            liveStreamPendingRef.current = "";
+            break;
+          }
+
+          const msg =
+            `${liveNextBufferRef.current}${remaining.slice(0, closeIdx)}`.trim();
+          if (msg) {
+            appendEvent(
+              makeEvent({ type: "next_update", agentId, message: msg }),
+            );
+          }
+          liveNextBufferRef.current = "";
+          remaining = remaining.slice(closeIdx + "</next>".length);
+          liveStreamModeRef.current = "text";
+          continue;
+        }
+
+        const closeIdx = remaining.indexOf("</think>");
+        if (closeIdx === -1) {
+          const { safe, pending } = stripTrailingPartialTag(
+            remaining,
+            "</think>",
+          );
+          liveStreamPendingRef.current = pending;
+          if (safe) {
+            sawRealtimeThinkingRef.current = true;
+            appendEvent(
+              makeEvent({
+                type: "reasoning_delta",
+                agentId:
+                  activeAgentIdRef.current === "unknown"
+                    ? "executor"
+                    : activeAgentIdRef.current,
+                delta: safe,
               }),
             );
           }
           break;
         }
 
-        const visible = remaining.slice(0, firstTag);
-        if (visible) {
-          appendEvent(
-            makeEvent({
-              type: "text_delta",
-              agentId: activeAgentIdRef.current === "unknown"
-                ? "executor"
-                : activeAgentIdRef.current,
-              content: visible,
-            }),
-          );
-        }
-
-        if (firstTag === thinkIdx) {
-          remaining = remaining.slice(thinkIdx + "<think>".length);
-          liveStreamModeRef.current = "think";
-        } else if (firstTag === statusIdx) {
-          remaining = remaining.slice(statusIdx + "<status>".length);
-          liveStreamModeRef.current = "status";
-          liveStatusBufferRef.current = "";
-        } else {
-          remaining = remaining.slice(nextTagIdx + "<next>".length);
-          liveStreamModeRef.current = "next";
-          liveNextBufferRef.current = "";
-        }
-        continue;
-      }
-
-      if (liveStreamModeRef.current === "status") {
-        const closeIdx = remaining.indexOf("</status>");
-        if (closeIdx === -1) {
-          liveStatusBufferRef.current += remaining;
-          liveStreamPendingRef.current = "";
-          break;
-        }
-
-        const status = `${liveStatusBufferRef.current}${remaining.slice(0, closeIdx)}`.trim();
-        if (status) {
-          appendEvent(
-            makeEvent({
-              type: "status_update",
-              agentId: activeAgentIdRef.current === "unknown"
-                ? "executor"
-                : activeAgentIdRef.current,
-              message: status,
-            }),
-          );
-        }
-        liveStatusBufferRef.current = "";
-        remaining = remaining.slice(closeIdx + "</status>".length);
-        liveStreamModeRef.current = "text";
-        continue;
-      }
-
-      if (liveStreamModeRef.current === "next") {
-        const closeIdx = remaining.indexOf("</next>");
-        const agentId = activeAgentIdRef.current === "unknown" ? "executor" : activeAgentIdRef.current;
-
-        if (closeIdx === -1) {
-          liveNextBufferRef.current += remaining;
-          // Stream partial update so the line appears live
-          if (liveNextBufferRef.current.trim()) {
-            appendEvent(makeEvent({ type: "next_update", agentId, message: liveNextBufferRef.current }));
-          }
-          liveStreamPendingRef.current = "";
-          break;
-        }
-
-        const msg = `${liveNextBufferRef.current}${remaining.slice(0, closeIdx)}`.trim();
-        if (msg) {
-          appendEvent(makeEvent({ type: "next_update", agentId, message: msg }));
-        }
-        liveNextBufferRef.current = "";
-        remaining = remaining.slice(closeIdx + "</next>".length);
-        liveStreamModeRef.current = "text";
-        continue;
-      }
-
-      const closeIdx = remaining.indexOf("</think>");
-      if (closeIdx === -1) {
-        const { safe, pending } = stripTrailingPartialTag(remaining, "</think>");
-        liveStreamPendingRef.current = pending;
-        if (safe) {
+        const reasoning = remaining.slice(0, closeIdx);
+        if (reasoning) {
           sawRealtimeThinkingRef.current = true;
           appendEvent(
             makeEvent({
               type: "reasoning_delta",
-              agentId: activeAgentIdRef.current === "unknown"
-                ? "executor"
-                : activeAgentIdRef.current,
-              delta: safe,
+              agentId:
+                activeAgentIdRef.current === "unknown"
+                  ? "executor"
+                  : activeAgentIdRef.current,
+              delta: reasoning,
             }),
           );
         }
-        break;
-      }
 
-      const reasoning = remaining.slice(0, closeIdx);
-      if (reasoning) {
-        sawRealtimeThinkingRef.current = true;
-        appendEvent(
-          makeEvent({
-            type: "reasoning_delta",
-            agentId: activeAgentIdRef.current === "unknown"
-              ? "executor"
-              : activeAgentIdRef.current,
-            delta: reasoning,
-          }),
-        );
+        remaining = remaining.slice(closeIdx + "</think>".length);
+        liveStreamModeRef.current = "text";
       }
-
-      remaining = remaining.slice(closeIdx + "</think>".length);
-      liveStreamModeRef.current = "text";
-    }
-  }, [appendEvent]);
+    },
+    [appendEvent],
+  );
 
   const setTaskStatus = useCallback((id: string, status: Task["status"]) => {
     setTasks((prev) =>
@@ -539,12 +600,7 @@ export default function useAgent(): UseAgentReturn {
         }
 
         case "done":
-          appendEvent(
-            makeEvent({
-              type: "run_completed",
-              finalOutput: phase.finalOutput,
-            }),
-          );
+          // Handled via state.output when client.run() resolves to prevent duplicate events.
           break;
 
         case "error":
@@ -621,9 +677,27 @@ export default function useAgent(): UseAgentReturn {
 
         // Thin wrapper: track whether done fired to prevent double-emission
         const wrappedOnPhase = (phase: Parameters<typeof onPhase>[0]) => {
-          if (phase.type === "thinking" && sawRealtimeThinkingRef.current) return;
+          if (phase.type === "thinking" && sawRealtimeThinkingRef.current)
+            return;
           if (phase.type === "done") doneEmitted = true;
           onPhase(phase);
+        };
+
+        const simulateStreaming = async (text: string) => {
+          // Speed: roughly 80 chars per second
+          const chunkSize = 4;
+          for (let i = 0; i < text.length; i += chunkSize) {
+            const chunk = text.slice(i, i + chunkSize);
+            appendEvent(
+              makeEvent({
+                type: "response_delta",
+                agentId: "agent",
+                content: chunk,
+              }),
+            );
+            await new Promise((r) => setTimeout(r, 15));
+            if (controller.signal.aborted) break;
+          }
         };
 
         const state = await clientRef.current.run({
@@ -648,9 +722,10 @@ export default function useAgent(): UseAgentReturn {
             );
             sessionLogger.log(chatId, "ERROR", state.output.message);
           }
-        } else if (state.output.type === "text" && !doneEmitted) {
+        } else if (state.output.type === "text") {
           const content = cleanAgentResponse(state.output.content.trim());
           if (content) {
+            await simulateStreaming(content);
             appendEvent(
               makeEvent({ type: "run_completed", finalOutput: content }),
             );
