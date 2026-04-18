@@ -15,6 +15,19 @@ Write clear, structured plain text.
 - Do not begin with filler like "Certainly!" unless the user asked for that tone.
 `.trim();
 
+const SIMPLE_CHAT_PROMPT = `
+You are Santra in casual conversation mode.
+
+- Reply naturally and briefly.
+- Do not inspect files, discuss tools, or talk like a coding agent.
+- Do not propose edits, plans, or repository exploration unless the user asks.
+- Keep greetings and acknowledgements to one short sentence.
+`.trim();
+
+function stripSystemMessages(previousMessages?: RunOptions["previousMessages"]) {
+  return (previousMessages ?? []).filter((message) => message.role !== "system");
+}
+
 // Runner decides whether to use single-agent mode or swarm mode for a request.
 export class Runner {
   private readonly agent: BaseAgent;
@@ -29,11 +42,11 @@ export class Runner {
     this.swarm = new Swarm(options.endpoint);
   }
 
-  private shouldUseSwarm(prompt: string, override?: boolean): boolean {
-    const classification = classifyPrompt(prompt);
-    if (classification !== "agent_task") return false;
+  private shouldUseSwarm(override?: boolean): boolean {
     if (override !== undefined) return override;
-    // Skip swarm for simple chat and direct questions — only agent tasks need orchestration
+    // Default to the dynamic multi-agent runtime. This matches the newer
+    // Codebuff-style architecture better: the main orchestrator decides whether
+    // to inspect files, answer directly, or delegate to specialists.
     return true;
   }
 
@@ -42,10 +55,7 @@ export class Runner {
     const classification = classifyPrompt(options.prompt);
     const explicitMode =
       options.useSwarm !== undefined ? options.useSwarm : this.useSwarm;
-    const swarm = this.shouldUseSwarm(
-      options.prompt,
-      explicitMode,
-    );
+    const swarm = this.shouldUseSwarm(explicitMode);
 
     if (swarm) {
       const state = await this.swarm.run({
@@ -81,12 +91,23 @@ export class Runner {
       };
     }
 
+    const sanitizedPreviousMessages =
+      classification === "agent_task"
+        ? options.previousMessages
+        : stripSystemMessages(options.previousMessages);
+
+    const systemPrompt =
+      classification === "direct_answer"
+        ? DIRECT_ANSWER_PROMPT
+        : classification === "simple_chat"
+          ? SIMPLE_CHAT_PROMPT
+          : undefined;
+
     return this.agent.run({
       prompt: options.prompt,
-      systemPrompt:
-        classification === "direct_answer" ? DIRECT_ANSWER_PROMPT : undefined,
+      systemPrompt,
       suppressProgressPhases: classification === "direct_answer",
-      previousMessages: options.previousMessages,
+      previousMessages: sanitizedPreviousMessages,
       onDelta: options.onDelta,
       onPhase: options.onPhase,
       abortSignal: options.abortSignal,

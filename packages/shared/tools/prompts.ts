@@ -1,8 +1,13 @@
 import { TOOL_DEFINITIONS } from "./definitions";
+import type { ToolName } from "../types/types.ts";
 
 // Build a plain-text prompt that teaches the model which tools exist and how to call them.
-export function buildToolInstructionsPrompt(): string {
-  const toolsBlock = TOOL_DEFINITIONS.map((tool) => {
+export function buildToolInstructionsPrompt(toolNames?: ToolName[]): string {
+  const tools = toolNames?.length
+    ? TOOL_DEFINITIONS.filter((tool) => toolNames.includes(tool.name))
+    : TOOL_DEFINITIONS;
+
+  const toolsBlock = tools.map((tool) => {
     const params = Object.entries(tool.parameters)
       .map(
         ([key, value]) =>

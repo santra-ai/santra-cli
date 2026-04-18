@@ -11,10 +11,26 @@ export type ToolName =
   | "read_file"
   | "write_file"
   | "str_replace"
+  | "apply_patch"
   | "list_directory"
   | "search_files"
   | "search_text"
-  | "get_cwd";
+  | "get_cwd"
+  | "spawn_agent"
+  | "spawn_agents"
+  | "glob"
+  | "code_search"
+  | "read_subtree"
+  | "write_todos"
+  | "run_terminal_command"
+  | "set_output"
+  | "set_messages"
+  | "task_completed"
+  | "suggest_followups"
+  | "lookup_agent_info"
+  | "ask_user"
+  | "web_search"
+  | "read_docs";
 
 export type ToolCallRequest = {
   id: string;
@@ -36,11 +52,7 @@ export type ThinkingStep = {
 };
 
 // Agents
-export type AgentId =
-  | "orchestrator"
-  | "file-picker"
-  | "reader"
-  | "executor";
+export type AgentId = string;
 
 export type AgentPhase =
   | { type: "thinking"; agentId: AgentId; delta: string }
@@ -48,8 +60,8 @@ export type AgentPhase =
   | { type: "next"; agentId: AgentId; message: string }
   | { type: "model_call_start"; agentId: AgentId; turn: number; summary: string }
   | { type: "model_call_end"; agentId: AgentId; turn: number; summary: string; detail?: string }
-  | { type: "tool_call"; call: ToolCallRequest }
-  | { type: "tool_result"; result: ToolCallResult }
+  | { type: "tool_call"; agentId: AgentId; call: ToolCallRequest }
+  | { type: "tool_result"; agentId: AgentId; result: ToolCallResult }
   | { type: "agent_start"; agentId: AgentId; task: string }
   | { type: "agent_done"; agentId: AgentId; output: string }
   | { type: "delta"; agentId: AgentId; content: string } // streaming text from a swarm agent
@@ -69,7 +81,8 @@ export type WebStreamEvent =
 export type AgentOutput =
   | { type: "text"; content: string }
   | { type: "error"; message: string; statusCode?: number }
-  | { type: "lastMessage"; content: [] };
+  | { type: "lastMessage"; content: [] }
+  | { type: "structured"; content: unknown };
 
 // RunState Types
 export type RunState = {

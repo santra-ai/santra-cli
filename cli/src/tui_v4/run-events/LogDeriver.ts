@@ -117,6 +117,10 @@ function describeSectionStart(agentId: string, task: string): string {
       return userTask.includes("read ") || userTask.includes("explain")
         ? "Preparing the final explanation"
         : "Implementing the requested change";
+    case "reviewer":
+      return "Reviewing the recent work";
+    case "thinker":
+      return "Reasoning through the tricky parts";
     default:
       return "Working on the task";
   }
@@ -129,7 +133,8 @@ function summarizeAgentOutput(
   const cleaned = cleanAgentResponse(output);
   if (!cleaned) return undefined;
 
-  // For orchestrator/file-picker, show more. For others, just the first relevant line.
+  // The main agent and file-picker often return short summaries that are useful
+  // to surface in the section footer.
   if (agentId === "orchestrator" || agentId === "file-picker") {
     return cleaned.length > 500 ? `${cleaned.slice(0, 500)}...` : cleaned;
   }
@@ -189,14 +194,46 @@ function describeToolCallActive(
       return `Writing ${path ?? "file"}`;
     case "str_replace":
       return `Editing ${path ?? "file"}`;
+    case "apply_patch":
+      return "Applying a patch";
     case "list_directory":
       return `Reading folder ${path ?? "."}`;
     case "search_files":
+    case "glob":
       return pattern ? `Finding files matching ${pattern}` : "Finding files";
     case "search_text":
+    case "code_search":
       return query
         ? `Searching code for "${truncateText(query, 48)}"`
         : "Searching code";
+    case "read_subtree":
+      return `Reading subtree ${path ?? "."}`;
+    case "write_todos":
+      return "Updating the task plan";
+    case "run_terminal_command":
+      return "Running a terminal command";
+    case "spawn_agent":
+      return `Spawning ${String(parameters["agent"] ?? "agent")}`;
+    case "spawn_agents":
+      return "Spawning parallel agents";
+    case "set_output":
+      return "Setting structured output";
+    case "set_messages":
+      return "Updating conversation state";
+    case "task_completed":
+      return "Marking the task complete";
+    case "suggest_followups":
+      return "Preparing follow-up suggestions";
+    case "lookup_agent_info":
+      return `Inspecting agent ${String(parameters["agent"] ?? "info")}`;
+    case "ask_user":
+      return "Preparing a clarification question";
+    case "web_search":
+      return query
+        ? `Searching the web for "${truncateText(query, 48)}"`
+        : "Searching the web";
+    case "read_docs":
+      return `Reading docs from ${String(parameters["source"] ?? "source")}`;
     case "get_cwd":
       return "Checking the working directory";
     default:
@@ -234,7 +271,36 @@ function buildToolCallDetail(
       return shown.join("\n");
     }
 
+    if (name === "glob") {
+      const files = parsed["files"] as string[] | undefined;
+      if (!files?.length) return undefined;
+      const shown = files.slice(0, 6).map((f) => cleanPath(f));
+      if (files.length > shown.length)
+        shown.push(`… ${files.length - shown.length} more`);
+      return shown.join("\n");
+    }
+
     if (name === "search_text") {
+      const matches = parsed["matches"] as
+        | Array<{ file?: string; line?: number; text?: string }>
+        | undefined;
+      if (!matches?.length) return undefined;
+      const shown = matches.slice(0, 5).map((m) => {
+        const file = typeof m.file === "string" ? cleanPath(m.file) : "file";
+        const line =
+          typeof m.line === "number" && m.line > 0 ? `:${m.line}` : "";
+        const snippet =
+          typeof m.text === "string"
+            ? truncateText(normalizeWhitespace(m.text))
+            : "";
+        return snippet ? `${file}${line}  ${snippet}` : `${file}${line}`;
+      });
+      if (matches.length > shown.length)
+        shown.push(`… ${matches.length - shown.length} more`);
+      return shown.join("\n");
+    }
+
+    if (name === "code_search") {
       const matches = parsed["matches"] as
         | Array<{ file?: string; line?: number; text?: string }>
         | undefined;
@@ -279,6 +345,69 @@ function buildToolCallDetail(
           .join("\n") || undefined
       );
     }
+
+    if (name === "read_subtree") {
+      const content =
+        typeof parsed["content"] === "string" ? parsed["content"] : "";
+      if (!content) return undefined;
+      return truncateText(content.replace(/\s+/g, " "), 220);
+    }
+
+    if (name === "run_terminal_command") {
+      const stdout =
+        typeof parsed["stdout"] === "string" ? parsed["stdout"].trim() : "";
+      const stderr =
+        typeof parsed["stderr"] === "string" ? parsed["stderr"].trim() : "";
+      const preview = stdout || stderr;
+      return preview ? truncateText(preview.replace(/\s+/g, " "), 220) : undefined;
+    }
+
+    if (name === "spawn_agent") {
+      const agent =
+        typeof parsed["agent"] === "string" ? parsed["agent"] : undefined;
+      const output =
+        typeof parsed["output"] === "string" ? parsed["output"] : undefined;
+      return [agent ? `Agent: ${agent}` : undefined, output]
+        .filter(Boolean)
+        .join("\n");
+    }
+
+    if (name === "spawn_agents") {
+      const results = parsed as unknown as Array<Record<string, unknown>>;
+      if (!Array.isArray(results) || results.length === 0) return undefined;
+      return results
+        .slice(0, 4)
+        .map((item) => {
+          const agent = typeof item["agent"] === "string" ? item["agent"] : "agent";
+          const error = typeof item["error"] === "string" ? item["error"] : "";
+          const output = typeof item["output"] === "string" ? item["output"] : "";
+          return error ? `${agent}: ${truncateText(error, 80)}` : `${agent}: ${truncateText(output, 80)}`;
+        })
+        .join("\n");
+    }
+
+    if (name === "ask_user") {
+      const question =
+        typeof parsed["question"] === "string" ? parsed["question"] : undefined;
+      return question;
+    }
+
+    if (name === "web_search") {
+      const results = parsed["results"] as Array<{ title?: string; url?: string }> | undefined;
+      if (!results?.length) return undefined;
+      return results
+        .slice(0, 4)
+        .map((result) =>
+          `${truncateText(result.title ?? "Result", 60)}${result.url ? ` — ${truncateText(result.url, 80)}` : ""}`,
+        )
+        .join("\n");
+    }
+
+    if (name === "read_docs") {
+      const content =
+        typeof parsed["content"] === "string" ? parsed["content"] : "";
+      return content ? truncateText(content.replace(/\s+/g, " "), 220) : undefined;
+    }
   } catch {
     return undefined;
   }
@@ -312,6 +441,16 @@ function describeToolError(
     return "Couldn't search files — no pattern provided.";
   if (error === "search_text: 'query' is required")
     return "Couldn't search code — no query provided.";
+  if (error === "read_subtree: 'path' is required")
+    return "Couldn't read the subtree — no path provided.";
+  if (error === "run_terminal_command: 'command' is required")
+    return "Couldn't run the command — no command was provided.";
+  if (error === "ask_user: 'question' is required")
+    return "Couldn't prepare a question — no question was provided.";
+  if (error === "web_search: 'query' is required")
+    return "Couldn't search the web — no query was provided.";
+  if (error === "read_docs: 'source' is required")
+    return "Couldn't read docs — no source was provided.";
 
   const missingFile = /^read_file: not found: (.+)$/.exec(error);
   if (missingFile)
@@ -377,8 +516,46 @@ function describeToolCallDone(
                 : "Finding files"
               : name === "search_text"
                 ? query
-                  ? `Searching code for "${truncateText(query, 48)}"`
-                  : "Searching code"
+                ? `Searching code for "${truncateText(query, 48)}"`
+                : "Searching code"
+                : name === "glob"
+                  ? pattern
+                    ? `Finding files matching ${pattern}`
+                    : "Finding files"
+                  : name === "code_search"
+                    ? query
+                      ? `Searching code for "${truncateText(query, 48)}"`
+                      : "Searching code"
+                    : name === "read_subtree"
+                      ? `Reading subtree ${path ?? "."}`
+                      : name === "write_todos"
+                        ? "Updating the task plan"
+                        : name === "run_terminal_command"
+                          ? "Running a terminal command"
+                          : name === "spawn_agent"
+                            ? `Spawning ${String(parameters["agent"] ?? "agent")}`
+                            : name === "spawn_agents"
+                              ? "Spawning parallel agents"
+                              : name === "set_output"
+                                ? "Setting structured output"
+                                : name === "set_messages"
+                                  ? "Updating conversation state"
+                                  : name === "task_completed"
+                                    ? "Marking the task complete"
+                                    : name === "suggest_followups"
+                                      ? "Preparing follow-up suggestions"
+                                      : name === "lookup_agent_info"
+                                        ? `Inspecting agent ${String(parameters["agent"] ?? "info")}`
+                                        : name === "ask_user"
+                                          ? "Preparing a clarification question"
+                                          : name === "web_search"
+                                            ? query
+                                              ? `Searching the web for "${truncateText(query, 48)}"`
+                                              : "Searching the web"
+                                            : name === "read_docs"
+                                              ? `Reading docs from ${String(parameters["source"] ?? "source")}`
+                                              : name === "apply_patch"
+                                                ? "Applying a patch"
                 : name === "get_cwd"
                   ? "Checking the working directory"
                   : `Running ${name}`;
@@ -398,7 +575,15 @@ function describeToolCallDone(
       const count = parsed["count"] as number | undefined;
       return `${base} — ${count ?? "?"} matches`;
     }
+    if (name === "glob") {
+      const count = parsed["count"] as number | undefined;
+      return `${base} — ${count ?? "?"} matches`;
+    }
     if (name === "search_text") {
+      const matches = parsed["matches"] as unknown[] | undefined;
+      return `${base} — ${matches?.length ?? "?"} matches`;
+    }
+    if (name === "code_search") {
       const matches = parsed["matches"] as unknown[] | undefined;
       return `${base} — ${matches?.length ?? "?"} matches`;
     }
@@ -407,6 +592,29 @@ function describeToolCallDone(
       return `${base} — ${changed ?? "?"} lines changed`;
     }
     if (name === "write_file") return `${base} — done`;
+    if (name === "apply_patch") return `${base} — done`;
+    if (name === "read_subtree") return `${base} — done`;
+    if (name === "write_todos") return `${base} — done`;
+    if (name === "run_terminal_command") {
+      const exitCode = parsed["exitCode"] as number | undefined;
+      return `${base} — exit ${exitCode ?? "?"}`;
+    }
+    if (name === "spawn_agent") return `${base} — done`;
+    if (name === "spawn_agents") {
+      const results = Array.isArray(parsed) ? parsed : [];
+      return `${base} — ${results.length} agents`;
+    }
+    if (name === "set_output") return `${base} — done`;
+    if (name === "set_messages") return `${base} — done`;
+    if (name === "task_completed") return `${base} — done`;
+    if (name === "suggest_followups") return `${base} — done`;
+    if (name === "lookup_agent_info") return `${base} — done`;
+    if (name === "ask_user") return `${base} — queued`;
+    if (name === "web_search") {
+      const count = parsed["count"] as number | undefined;
+      return `${base} — ${count ?? "?"} results`;
+    }
+    if (name === "read_docs") return `${base} — done`;
     if (name === "get_cwd") return base;
   } catch {
     return base;
@@ -431,7 +639,6 @@ interface PendingTool {
   parameters: Record<string, unknown>;
   slotIdx: number;
   label?: string;
-  absorbedStatusIdx?: number | null;
 }
 
 interface ThinkState {
@@ -764,18 +971,6 @@ export class LogDeriver {
           slotIdx,
         });
         this.narrativeNextReceived = false;
-        const fallback = cleanAgentResponse(event.summary) || "";
-        if (this.nextSlotIdx !== null) {
-          this.update(this.nextSlotIdx, () => ({ message: fallback, time }));
-        } else {
-          this.nextSlotIdx = this.push({
-            id: "next-slot",
-            time,
-            level: "next",
-            message: fallback,
-            done: false,
-          });
-        }
         break;
       }
 
@@ -796,9 +991,6 @@ export class LogDeriver {
         
         const summaryMsg = cleanAgentResponse(event.summary) || "";
         this.lastAgentIntent = summaryMsg;
-        if (this.nextSlotIdx !== null && !this.narrativeNextReceived) {
-          this.update(this.nextSlotIdx, () => ({ message: summaryMsg, time }));
-        }
         break;
       }
 
@@ -840,23 +1032,6 @@ export class LogDeriver {
         // Caching this allows the next tool_call_completed to fall back to this status
         // instead of going completely blank.
         if (statusMessage) this.lastAgentIntent = statusMessage;
-
-        // Mirror the status to the next slot so it shows as the bottom progress line,
-        // but stay on the agentic 'next' narrative if we've already received one.
-        if (!this.narrativeNextReceived) {
-          const finalMsg = statusMessage || "";
-          if (this.nextSlotIdx !== null) {
-            this.update(this.nextSlotIdx, () => ({ message: finalMsg, time }));
-          } else {
-            this.nextSlotIdx = this.push({
-              id: "next-slot",
-              time,
-              level: "next",
-              message: finalMsg,
-              done: false,
-            });
-          }
-        }
         break;
       }
 
@@ -884,12 +1059,9 @@ export class LogDeriver {
         this.lastStatusSlotIdx = null;
         this.lastStatusMessage = "";
 
-        // Internal agents (orchestrator, file-picker) speak only in JSON protocol
-        // which should never be streamed live to the user.
-        if (
-          event.agentId === "orchestrator" ||
-          event.agentId === "file-picker"
-        ) {
+        // Keep file-picker output buffered; its intermediate output is usually
+        // internal exploration rather than directly user-facing prose.
+        if (event.agentId === "file-picker") {
           break;
         }
 
@@ -933,23 +1105,6 @@ export class LogDeriver {
       case "tool_call_started": {
         this.finalizeNarration(event.agentId);
 
-        // Mirror the active tool call to the next slot so the user sees "Calling: read_file",
-        // but ONLY if we haven't already received a more descriptive agentic 'next' narrative.
-        if (!this.narrativeNextReceived) {
-          const toolMsg = `Calling: ${event.name}...`;
-          if (this.nextSlotIdx !== null) {
-            this.update(this.nextSlotIdx, () => ({ message: toolMsg, time }));
-          } else {
-            this.nextSlotIdx = this.push({
-              id: "next-slot",
-              time,
-              level: "next",
-              message: toolMsg,
-              done: false,
-            });
-          }
-        }
-
         // Discard any active stream from intermediate model text before this tool call.
         if (this.streamSlotIdx !== null) {
           this.evict(this.streamSlotIdx);
@@ -959,12 +1114,13 @@ export class LogDeriver {
         }
 
         let bulletLabel = describeToolCallActive(event.name, event.parameters);
-        let absorbedStatusIdx: number | null = null;
         if (this.lastStatusSlotIdx !== null) {
-          bulletLabel = this.lastStatusMessage;
-          absorbedStatusIdx = this.lastStatusSlotIdx;
-          // Keep it for now, so the UI doesn't flicker to empty while the tool runs.
-          // We'll evict it in tool_call_completed.
+          // Fold the latest short status into the tool bullet and remove the
+          // standalone status row to avoid duplicate "Reading..." lines.
+          if (this.lastStatusMessage) {
+            bulletLabel = this.lastStatusMessage;
+          }
+          this.evict(this.lastStatusSlotIdx);
           this.lastStatusSlotIdx = null;
           this.lastStatusMessage = "";
         }
@@ -972,9 +1128,14 @@ export class LogDeriver {
         this.pendingTools.set(event.toolCallId, {
           name: event.name,
           parameters: event.parameters,
-          slotIdx: -1, // No visible slot yet
+          slotIdx: this.push({
+            id: `${event.eventId}-bullet-active`,
+            time,
+            level: "bullet",
+            message: bulletLabel,
+            done: false,
+          }),
           label: bulletLabel,
-          absorbedStatusIdx,
         });
         break;
       }
@@ -983,20 +1144,14 @@ export class LogDeriver {
         const pending = this.pendingTools.get(event.toolCallId);
         if (!pending) break;
 
-        // Now that the tool is done, evict the predecessor status row if we absorbed it.
-        if (typeof pending.absorbedStatusIdx === "number") {
-          this.evict(pending.absorbedStatusIdx);
-        }
-
         if (event.error) {
-          this.push({
+          this.update(pending.slotIdx, () => ({
             id: `${event.eventId}-bullet-failed`,
             time,
-            level: "bullet",
             message: `${pending.label ?? describeToolCallActive(event.name, event.parameters)} — failed`,
             failed: true,
             done: true,
-          });
+          }));
           this.push({
             id: `${event.eventId}-error`,
             time,
@@ -1030,23 +1185,17 @@ export class LogDeriver {
               event.output,
             );
           }
-          this.push({
+          this.update(pending.slotIdx, () => ({
             id: `${event.eventId}-bullet`,
             time,
-            level: "bullet",
             message: doneMessage,
             done: true,
-            ...(detail !== undefined ? { detail } : {}),
-          });
+            failed: false,
+            ...(detail !== undefined ? { detail } : { detail: undefined }),
+          }));
         }
 
         this.pendingTools.delete(event.toolCallId);
-
-        // Clear progress line when tool finishes ONLY if it was a "Calling..." status.
-        // Don't clear it if it was a narrative <next> update.
-        if (this.nextSlotIdx !== null && !this.narrativeNextReceived) {
-          this.update(this.nextSlotIdx, () => ({ message: this.lastAgentIntent || "", time }));
-        }
         break;
       }
 

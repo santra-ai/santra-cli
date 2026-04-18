@@ -74,8 +74,12 @@ export function TranscriptView({
 
   return (
     <Box flexDirection="column" width={width} height={height} paddingX={1}>
-      {visibleRows.map((row) => (
-        <TranscriptLine key={row.key} row={row} width={innerWidth} />
+      {visibleRows.map((row, index) => (
+        <TranscriptLine
+          key={`${row.key}:${start + index}`}
+          row={row}
+          width={innerWidth}
+        />
       ))}
       {Array.from({ length: fillerCount }, (_, index) => (
         <Text key={`filler-${index}`}>{" ".repeat(innerWidth)}</Text>

@@ -27,7 +27,7 @@ export class Client {
   private readonly systemMessage: Message;
 
   constructor(config: ClientConfig = {}) {
-    const agent = getAgent(config.agentId ?? "base");
+    const agent = getAgent(config.agentId ?? "orchestrator");
     this.systemMessage = { role: "system", content: agent.description };
     this.runner = new Runner({ endpoint: agent.endpoint });
   }

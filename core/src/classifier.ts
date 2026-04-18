@@ -49,6 +49,37 @@ const CODEBASE_CONTEXT_RE =
   /\b(this (codebase|project|repo|code|implementation)|the (code|implementation|codebase))\b/i;
 
 /**
+ * Broader whole-repository reading/explaining requests that should still use
+ * the agent path even without "this repo" style wording.
+ */
+const WHOLE_CODEBASE_RE =
+  /\b(read|scan|analyze|explain|walk me through)\b[\s\S]{0,80}\b(whole|entire|full)\s+(codebase|repo|repository|project)\b|\b(whole|entire|full)\s+(codebase|repo|repository|project)\b[\s\S]{0,80}\b(read|scan|analyze|explain|walk me through)\b/i;
+
+/**
+ * Documentation requests that are explicitly about the current repository or
+ * its files should route through the agent so it can inspect the repo first.
+ */
+const REPO_DOC_RE =
+  /\b(readme|documentation|docs)\b/i;
+
+const REPO_REFERENCE_RE =
+  /\b(repo|repository|project|codebase)\b/i;
+
+/**
+ * Local-workspace language. Requests framed around "my", "this", "here", or
+ * the current workspace should bias toward agent execution over generic chat.
+ */
+const LOCAL_CONTEXT_RE =
+  /\b(my|this|current|here|our)\b/i;
+
+/**
+ * Common repository artifacts that usually live in the workspace and should
+ * be inspected rather than guessed about.
+ */
+const WORKSPACE_ARTIFACT_RE =
+  /\b(readme|documentation|docs|config|package\.json|tsconfig|dockerfile|license|changelog)\b/i;
+
+/**
  * Classify a prompt into one of three buckets:
  *
  * - `simple_chat`   — greeting / social acknowledgement; no planner, no tools.
@@ -84,6 +115,27 @@ export function classifyPrompt(prompt: string): PromptClassification {
 
   // 2. Codebase-context phrase ("this project", "this codebase", etc.)
   if (CODEBASE_CONTEXT_RE.test(lower)) return "agent_task";
+
+  // 2a. Broad whole-codebase reading/explaining requests still require repo access.
+  if (WHOLE_CODEBASE_RE.test(lower)) return "agent_task";
+
+  // 2b. Repo-aware documentation requests (e.g. "update my README with
+  // relevant data of this repository") must inspect files before answering.
+  if (REPO_DOC_RE.test(lower) && REPO_REFERENCE_RE.test(lower)) {
+    return "agent_task";
+  }
+
+  // 2c. Local-workspace artifact requests should also route to the agent even
+  // when the user does not explicitly say "repository".
+  if (LOCAL_CONTEXT_RE.test(lower) && WORKSPACE_ARTIFACT_RE.test(lower)) {
+    return "agent_task";
+  }
+
+  // 2d. Action-oriented documentation requests are typically about the current
+  // repo in a coding assistant context, so prefer the agent path.
+  if (SOFT_CONSTRUCTION_VERB_RE.test(lower) && REPO_DOC_RE.test(lower)) {
+    return "agent_task";
+  }
 
   // 3. Hard agent verbs — always need code context (fix, debug, refactor, etc.)
   if (HARD_AGENT_VERB_RE.test(lower)) return "agent_task";

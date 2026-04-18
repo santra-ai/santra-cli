@@ -36,6 +36,40 @@ function makeId(): string {
 
 type LiveStreamMode = "text" | "think" | "status" | "next";
 
+function normalizeAgentMarkupChunk(text: string): string {
+  return text
+    .replace(/<thinking\b[^>]*>/gi, "<think>")
+    .replace(/<\/thinking\s*>/gi, "</think>")
+    .replace(/<think\b[^>]*>/gi, "<think>")
+    .replace(/<\/think\s*>/gi, "</think>")
+    .replace(/<short\b[^>]*>/gi, "<status>")
+    .replace(/<\/short\s*>/gi, "</status>")
+    .replace(/<step\b[^>]*>/gi, "<status>")
+    .replace(/<\/step\s*>/gi, "</status>")
+    .replace(/<heading\b[^>]*>/gi, "<status>")
+    .replace(/<\/heading\s*>/gi, "</status>")
+    .replace(/<status\b[^>]*>/gi, "<status>")
+    .replace(/<\/status\s*>/gi, "</status>")
+    .replace(/<next\b[^>]*>/gi, "<next>")
+    .replace(/<\/next\s*>/gi, "</next>")
+    .replace(/<\/<\s*thinking\s*>/gi, "</think>")
+    .replace(/<\/<\s*think\s*>/gi, "</think>")
+    .replace(/<\/<\s*short\s*>/gi, "</status>")
+    .replace(/<\/<\s*step\s*>/gi, "</status>")
+    .replace(/<\/<\s*heading\s*>/gi, "</status>")
+    .replace(/<\/<\s*status\s*>/gi, "</status>")
+    .replace(/<\/<\s*next\s*>/gi, "</next>");
+}
+
+function earliestTagIndex(text: string, tags: string[]): number {
+  let idx = Infinity;
+  for (const tag of tags) {
+    const found = text.indexOf(tag);
+    if (found !== -1) idx = Math.min(idx, found);
+  }
+  return idx === Infinity ? -1 : idx;
+}
+
 function stripTrailingPartialTag(
   text: string,
   tag: string,
@@ -61,6 +95,21 @@ function pathDepth(path: string): number {
 
 function pathName(path: string): string {
   return path.split("/").pop() ?? path;
+}
+
+function labelForAgent(id: string): string {
+  return (
+    TASK_LABELS[id] ??
+    id
+      .split(/[-_]/g)
+      .filter(Boolean)
+      .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+      .join(" ")
+  );
+}
+
+function currentAgentOrchestrator(id: string): string {
+  return id === "unknown" ? "orchestrator" : id;
 }
 
 function upsertFile(
@@ -90,11 +139,21 @@ function upsertFile(
   ];
 }
 
+const TASK_LABELS: Record<string, string> = {
+  orchestrator: "Main agent",
+  "file-picker": "Find files",
+  reader: "Read code",
+  executor: "Edit code",
+  reviewer: "Review work",
+  thinker: "Think deeply",
+};
+
 const INITIAL_TASKS: Task[] = [
-  { id: "orchestrator", label: "Plan task", status: "pending" },
-  { id: "file-picker", label: "Read files", status: "pending" },
-  { id: "reader", label: "Analyze code", status: "pending" },
-  { id: "executor", label: "Execute changes", status: "pending" },
+  {
+    id: "orchestrator",
+    label: TASK_LABELS["orchestrator"] ?? "Main agent",
+    status: "pending",
+  },
 ];
 
 function makeInitialStats(): AgentStats {
@@ -205,19 +264,7 @@ export default function useAgent(): UseAgentReturn {
       ): agentId is "reader" | "executor" =>
         agentId === "reader" || agentId === "executor";
 
-      const normalizedChunk = rawChunk
-        .replace(/<thinking\b[^>]*>/gi, "<think>")
-        .replace(/<\/thinking\s*>/gi, "</think>")
-        .replace(/<think\b[^>]*>/gi, "<think>")
-        .replace(/<\/think\s*>/gi, "</think>")
-        .replace(/<step\b[^>]*>/gi, "<status>")
-        .replace(/<\/step\s*>/gi, "</status>")
-        .replace(/<heading\b[^>]*>/gi, "<status>")
-        .replace(/<\/heading\s*>/gi, "</status>")
-        .replace(/<status\b[^>]*>/gi, "<status>")
-        .replace(/<\/status\s*>/gi, "</status>")
-        .replace(/<next\b[^>]*>/gi, "<next>")
-        .replace(/<\/next\s*>/gi, "</next>");
+      const normalizedChunk = normalizeAgentMarkupChunk(rawChunk);
 
       let remaining = liveStreamPendingRef.current + normalizedChunk;
       liveStreamPendingRef.current = "";
@@ -252,9 +299,7 @@ export default function useAgent(): UseAgentReturn {
                   makeEvent({
                     type: "response_delta",
                     agentId:
-                      activeAgentIdRef.current === "unknown"
-                        ? "agent"
-                        : activeAgentIdRef.current,
+                      currentAgentOrchestrator(activeAgentIdRef.current),
                     content: safe,
                   }),
                 );
@@ -284,10 +329,7 @@ export default function useAgent(): UseAgentReturn {
               appendEvent(
                 makeEvent({
                   type: "next_update",
-                  agentId:
-                    activeAgentIdRef.current === "unknown"
-                      ? "executor"
-                      : activeAgentIdRef.current,
+                  agentId: currentAgentOrchestrator(activeAgentIdRef.current),
                   message: normalized,
                 }),
               );
@@ -304,9 +346,7 @@ export default function useAgent(): UseAgentReturn {
                 makeEvent({
                   type: "response_delta",
                   agentId:
-                    activeAgentIdRef.current === "unknown"
-                      ? "agent"
-                      : activeAgentIdRef.current,
+                    currentAgentOrchestrator(activeAgentIdRef.current),
                   content: visible,
                 }),
               );
@@ -338,40 +378,53 @@ export default function useAgent(): UseAgentReturn {
 
         if (liveStreamModeRef.current === "status") {
           const closeIdx = remaining.indexOf("</status>");
-          if (closeIdx === -1) {
+          const recoveryIdx = earliestTagIndex(remaining, [
+            "<think>",
+            "<next>",
+            "<status>",
+          ]);
+          if (closeIdx === -1 && recoveryIdx === -1) {
             liveStatusBufferRef.current += remaining;
             liveStreamPendingRef.current = "";
             break;
           }
 
+          const endIdx =
+            closeIdx !== -1 && (recoveryIdx === -1 || closeIdx <= recoveryIdx)
+              ? closeIdx
+              : recoveryIdx;
           const status =
-            `${liveStatusBufferRef.current}${remaining.slice(0, closeIdx)}`.trim();
+            `${liveStatusBufferRef.current}${remaining.slice(0, endIdx)}`.trim();
           if (status) {
             appendEvent(
               makeEvent({
                 type: "status_update",
-                agentId:
-                  activeAgentIdRef.current === "unknown"
-                    ? "executor"
-                    : activeAgentIdRef.current,
+                agentId: currentAgentOrchestrator(activeAgentIdRef.current),
                 message: status,
               }),
             );
           }
           liveStatusBufferRef.current = "";
-          remaining = remaining.slice(closeIdx + "</status>".length);
-          liveStreamModeRef.current = "text";
+          if (closeIdx !== -1 && endIdx === closeIdx) {
+            remaining = remaining.slice(closeIdx + "</status>".length);
+            liveStreamModeRef.current = "text";
+          } else {
+            remaining = remaining.slice(endIdx);
+            liveStreamModeRef.current = "text";
+          }
           continue;
         }
 
         if (liveStreamModeRef.current === "next") {
           const closeIdx = remaining.indexOf("</next>");
-          const agentId =
-            activeAgentIdRef.current === "unknown"
-              ? "executor"
-              : activeAgentIdRef.current;
+          const recoveryIdx = earliestTagIndex(remaining, [
+            "<think>",
+            "<status>",
+            "<next>",
+          ]);
+          const agentId = currentAgentOrchestrator(activeAgentIdRef.current);
 
-          if (closeIdx === -1) {
+          if (closeIdx === -1 && recoveryIdx === -1) {
             liveNextBufferRef.current += remaining;
             // Stream partial update so the line appears live
             if (liveNextBufferRef.current.trim()) {
@@ -387,21 +440,35 @@ export default function useAgent(): UseAgentReturn {
             break;
           }
 
+          const endIdx =
+            closeIdx !== -1 && (recoveryIdx === -1 || closeIdx <= recoveryIdx)
+              ? closeIdx
+              : recoveryIdx;
           const msg =
-            `${liveNextBufferRef.current}${remaining.slice(0, closeIdx)}`.trim();
+            `${liveNextBufferRef.current}${remaining.slice(0, endIdx)}`.trim();
           if (msg) {
             appendEvent(
               makeEvent({ type: "next_update", agentId, message: msg }),
             );
           }
           liveNextBufferRef.current = "";
-          remaining = remaining.slice(closeIdx + "</next>".length);
-          liveStreamModeRef.current = "text";
+          if (closeIdx !== -1 && endIdx === closeIdx) {
+            remaining = remaining.slice(closeIdx + "</next>".length);
+            liveStreamModeRef.current = "text";
+          } else {
+            remaining = remaining.slice(endIdx);
+            liveStreamModeRef.current = "text";
+          }
           continue;
         }
 
         const closeIdx = remaining.indexOf("</think>");
-        if (closeIdx === -1) {
+        const recoveryIdx = earliestTagIndex(remaining, [
+          "<status>",
+          "<next>",
+          "<think>",
+        ]);
+        if (closeIdx === -1 && recoveryIdx === -1) {
           const { safe, pending } = stripTrailingPartialTag(
             remaining,
             "</think>",
@@ -412,10 +479,7 @@ export default function useAgent(): UseAgentReturn {
             appendEvent(
               makeEvent({
                 type: "reasoning_delta",
-                agentId:
-                  activeAgentIdRef.current === "unknown"
-                    ? "executor"
-                    : activeAgentIdRef.current,
+                agentId: currentAgentOrchestrator(activeAgentIdRef.current),
                 delta: safe,
               }),
             );
@@ -423,22 +487,27 @@ export default function useAgent(): UseAgentReturn {
           break;
         }
 
-        const reasoning = remaining.slice(0, closeIdx);
+        const endIdx =
+          closeIdx !== -1 && (recoveryIdx === -1 || closeIdx <= recoveryIdx)
+            ? closeIdx
+            : recoveryIdx;
+        const reasoning = remaining.slice(0, endIdx);
         if (reasoning) {
           sawRealtimeThinkingRef.current = true;
           appendEvent(
             makeEvent({
               type: "reasoning_delta",
-              agentId:
-                activeAgentIdRef.current === "unknown"
-                  ? "executor"
-                  : activeAgentIdRef.current,
+              agentId: currentAgentOrchestrator(activeAgentIdRef.current),
               delta: reasoning,
             }),
           );
         }
 
-        remaining = remaining.slice(closeIdx + "</think>".length);
+        if (closeIdx !== -1 && endIdx === closeIdx) {
+          remaining = remaining.slice(closeIdx + "</think>".length);
+        } else {
+          remaining = remaining.slice(endIdx);
+        }
         liveStreamModeRef.current = "text";
       }
     },
@@ -447,7 +516,16 @@ export default function useAgent(): UseAgentReturn {
 
   const setTaskStatus = useCallback((id: string, status: Task["status"]) => {
     setTasks((prev) =>
-      prev.map((task) => (task.id === id ? { ...task, status } : task)),
+      prev.some((task) => task.id === id)
+        ? prev.map((task) => (task.id === id ? { ...task, status } : task))
+        : [
+            ...prev,
+            {
+              id,
+              label: labelForAgent(id),
+              status,
+            },
+          ],
     );
   }, []);
 
@@ -575,7 +653,7 @@ export default function useAgent(): UseAgentReturn {
             makeEvent({
               type: "tool_call_started",
               toolCallId: call.id,
-              agentId: activeAgentIdRef.current,
+              agentId: phase.agentId,
               name: call.name,
               parameters: call.parameters,
             }),
@@ -616,7 +694,7 @@ export default function useAgent(): UseAgentReturn {
             makeEvent({
               type: "tool_call_completed",
               toolCallId: result.id,
-              agentId: activeAgentIdRef.current,
+              agentId: phase.agentId,
               name: result.name,
               parameters: pendingParams,
               output: result.output,
@@ -759,15 +837,16 @@ export default function useAgent(): UseAgentReturn {
           }
         } else if (state.output.type === "text") {
           const content = cleanAgentResponse(state.output.content.trim());
-          if (content) {
-            if (!sawRealtimeResponseRef.current) {
-              await simulateStreaming(content);
-            }
-            appendEvent(
-              makeEvent({ type: "run_completed", finalOutput: content }),
-            );
-            sessionLogger.log(chatId, "RESPONSE", content);
+          const finalOutput =
+            content ||
+            "I finished the run, but I did not produce a visible final response.";
+          if (!sawRealtimeResponseRef.current && finalOutput) {
+            await simulateStreaming(finalOutput);
           }
+          appendEvent(
+            makeEvent({ type: "run_completed", finalOutput }),
+          );
+          sessionLogger.log(chatId, "RESPONSE", finalOutput);
         }
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);

@@ -85,6 +85,26 @@ const NEXT_CLOSE = "</next>";
 const TOOL_OPEN_PREFIX = "<tool_call";
 const TOOL_CLOSE = "</tool_call>";
 
+function normalizeAgentMarkup(text: string): string {
+  return text
+    .replace(/<thinking>/gi, THINKING_OPEN)
+    .replace(/<\/thinking>/gi, THINKING_CLOSE)
+    .replace(/<short\b[^>]*>/gi, STATUS_OPEN)
+    .replace(/<\/short\s*>/gi, STATUS_CLOSE)
+    .replace(/<step>/gi, STATUS_OPEN)
+    .replace(/<\/step>/gi, STATUS_CLOSE)
+    .replace(/<heading\b[^>]*>/gi, STATUS_OPEN)
+    .replace(/<\/heading\s*>/gi, STATUS_CLOSE)
+    .replace(/<\/<\s*thinking\s*>/gi, THINKING_CLOSE)
+    .replace(/<\/<\s*think\s*>/gi, THINKING_CLOSE)
+    .replace(/<\/<\s*short\s*>/gi, STATUS_CLOSE)
+    .replace(/<\/<\s*step\s*>/gi, STATUS_CLOSE)
+    .replace(/<\/<\s*heading\s*>/gi, STATUS_CLOSE)
+    .replace(/<\/<\s*status\s*>/gi, STATUS_CLOSE)
+    .replace(/<\/<\s*next\s*>/gi, NEXT_CLOSE)
+    .replace(/<\/<\s*tool_call\s*>/gi, TOOL_CLOSE);
+}
+
 // StreamParser reads mixed model output and extracts text, thinking, and tool calls.
 // Designed to be robust against Qwen Coder's output variations.
 export class StreamParser {
@@ -96,11 +116,7 @@ export class StreamParser {
   constructor(private readonly onChunk: (chunk: ParsedChunk) => void) {}
 
   push(text: string): void {
-    this.buffer += text
-      .replace(/<thinking>/gi, THINKING_OPEN)
-      .replace(/<\/thinking>/gi, THINKING_CLOSE)
-      .replace(/<step>/gi, STATUS_OPEN)
-      .replace(/<\/step>/gi, STATUS_CLOSE);
+    this.buffer += normalizeAgentMarkup(text);
     this.flush();
   }
 
@@ -215,31 +231,76 @@ export class StreamParser {
         }
       } else if (this.state === "in_thinking") {
         const ci = this.buffer.indexOf(THINKING_CLOSE);
-        if (ci === -1) break;
-        const content = this.buffer.slice(0, ci).trim();
+        const recoveryIdx = this.findRecoveryTagIndex([
+          STATUS_OPEN,
+          NEXT_OPEN,
+          TOOL_OPEN_PREFIX,
+        ]);
+        if (ci === -1 && recoveryIdx === -1) break;
+        const endIdx =
+          ci !== -1 && (recoveryIdx === -1 || ci <= recoveryIdx)
+            ? ci
+            : recoveryIdx;
+        if (endIdx === -1) break;
+        const content = this.buffer.slice(0, endIdx).trim();
         if (content) {
           this.onChunk({ type: "thinking", content });
         }
-        this.buffer = this.buffer.slice(ci + THINKING_CLOSE.length);
-        this.state = "idle";
+        if (ci !== -1 && endIdx === ci) {
+          this.buffer = this.buffer.slice(ci + THINKING_CLOSE.length);
+          this.state = "idle";
+        } else {
+          this.buffer = this.buffer.slice(endIdx);
+          this.state = "idle";
+        }
       } else if (this.state === "in_status") {
         const ci = this.buffer.indexOf(STATUS_CLOSE);
-        if (ci === -1) break;
-        const content = this.buffer.slice(0, ci).trim();
+        const recoveryIdx = this.findRecoveryTagIndex([
+          THINKING_OPEN,
+          NEXT_OPEN,
+          TOOL_OPEN_PREFIX,
+        ]);
+        if (ci === -1 && recoveryIdx === -1) break;
+        const endIdx =
+          ci !== -1 && (recoveryIdx === -1 || ci <= recoveryIdx)
+            ? ci
+            : recoveryIdx;
+        if (endIdx === -1) break;
+        const content = this.buffer.slice(0, endIdx).trim();
         if (content) {
           this.onChunk({ type: "status", content });
         }
-        this.buffer = this.buffer.slice(ci + STATUS_CLOSE.length);
-        this.state = "idle";
+        if (ci !== -1 && endIdx === ci) {
+          this.buffer = this.buffer.slice(ci + STATUS_CLOSE.length);
+          this.state = "idle";
+        } else {
+          this.buffer = this.buffer.slice(endIdx);
+          this.state = "idle";
+        }
       } else if (this.state === "in_next") {
         const ci = this.buffer.indexOf(NEXT_CLOSE);
-        if (ci === -1) break;
-        const content = this.buffer.slice(0, ci).trim();
+        const recoveryIdx = this.findRecoveryTagIndex([
+          THINKING_OPEN,
+          STATUS_OPEN,
+          TOOL_OPEN_PREFIX,
+        ]);
+        if (ci === -1 && recoveryIdx === -1) break;
+        const endIdx =
+          ci !== -1 && (recoveryIdx === -1 || ci <= recoveryIdx)
+            ? ci
+            : recoveryIdx;
+        if (endIdx === -1) break;
+        const content = this.buffer.slice(0, endIdx).trim();
         if (content) {
           this.onChunk({ type: "next", content });
         }
-        this.buffer = this.buffer.slice(ci + NEXT_CLOSE.length);
-        this.state = "idle";
+        if (ci !== -1 && endIdx === ci) {
+          this.buffer = this.buffer.slice(ci + NEXT_CLOSE.length);
+          this.state = "idle";
+        } else {
+          this.buffer = this.buffer.slice(endIdx);
+          this.state = "idle";
+        }
       } else {
         // in_tool
         const ci = this.buffer.indexOf(TOOL_CLOSE);
@@ -283,6 +344,15 @@ export class StreamParser {
       }
     }
     return safe;
+  }
+
+  private findRecoveryTagIndex(tags: string[]): number {
+    let idx = Infinity;
+    for (const tag of tags) {
+      const found = this.buffer.indexOf(tag);
+      if (found !== -1) idx = Math.min(idx, found);
+    }
+    return idx === Infinity ? -1 : idx;
   }
 }
 

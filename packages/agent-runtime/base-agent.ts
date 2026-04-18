@@ -24,6 +24,7 @@ export type AgentRunOptions = {
   systemPrompt?: string;
   suppressProgressPhases?: boolean;
   previousMessages?: Message[];
+  appendPrompt?: boolean;
   onDelta?: (chunk: string) => void;
   onPhase?: (phase: AgentPhase) => void;
   maxToolIterations?: number;
@@ -34,6 +35,10 @@ export type AgentRunOptions = {
     oldStr: string,
     newStr: string,
   ) => Promise<FileChangeFeedback>;
+  toolExecutor?: (
+    call: ToolCallRequest,
+    context: { messages: Message[]; agentId: AgentId; prompt: string },
+  ) => Promise<ToolCallResult>;
 };
 
 // ─── SSE helpers ──────────────────────────────────────────────────────────────
@@ -111,6 +116,34 @@ function summarizeModelTurnResult(
       };
 }
 
+function normalizeToolOutputValue(value: unknown): string {
+  if (typeof value === "string") {
+    try {
+      const parsed = JSON.parse(value) as unknown;
+      return normalizeToolOutputValue(parsed);
+    } catch {
+      return value;
+    }
+  }
+
+  if (Array.isArray(value)) {
+    return JSON.stringify(value);
+  }
+
+  if (value && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    for (const key of ["text", "content", "summary", "message", "output", "data"]) {
+      if (key in record) {
+        return normalizeToolOutputValue(record[key]);
+      }
+    }
+    return JSON.stringify(record);
+  }
+
+  if (value === undefined || value === null) return "";
+  return String(value);
+}
+
 function isBroadRepoExplanationPrompt(prompt: string): boolean {
   const lower = prompt.toLowerCase();
   return (
@@ -186,7 +219,7 @@ function recoverToolCallFromText(
   agentId: AgentId,
   recoveredId: string,
 ): ToolCallRequest | null {
-  if (!["file-picker", "reader", "executor"].includes(agentId)) {
+  if (!["orchestrator", "file-picker", "reader", "executor"].includes(agentId)) {
     return null;
   }
 
@@ -413,11 +446,13 @@ export class BaseAgent {
       systemPrompt,
       suppressProgressPhases = false,
       previousMessages = [],
+      appendPrompt = true,
       onDelta,
       onPhase,
       maxToolIterations = 8,
       abortSignal,
       onFileChangeReview,
+      toolExecutor,
     } = options;
 
     let messages: Message[];
@@ -425,15 +460,19 @@ export class BaseAgent {
     if (systemPrompt) {
       messages = [
         { role: "system" as const, content: systemPrompt },
-        { role: "user" as const, content: prompt },
+        ...(appendPrompt ? [{ role: "user" as const, content: prompt }] : []),
       ];
     } else if (previousMessages.length > 0) {
-      messages = [
-        ...previousMessages,
-        { role: "user" as const, content: prompt },
-      ];
+      messages = appendPrompt
+        ? [
+            ...previousMessages,
+            { role: "user" as const, content: prompt },
+          ]
+        : [...previousMessages];
     } else {
-      messages = [{ role: "user" as const, content: prompt }];
+      messages = appendPrompt
+        ? [{ role: "user" as const, content: prompt }]
+        : [];
     }
 
     const allToolResults: ToolCallResult[] = [];
@@ -441,6 +480,8 @@ export class BaseAgent {
     let finalText = "";
     let toolCallCounter = 0;
     let repoReadNudges = 0;
+    let forcedFinalOutput: string | undefined;
+    let taskCompleted = false;
 
     // Cache original file content for write_file reverts: callId → originalContent
     const originalFileContent = new Map<string, string>();
@@ -618,8 +659,14 @@ export class BaseAgent {
           }
         }
 
-        onPhase?.({ type: "tool_call", call });
-        const result = await executeToolCall(call);
+        onPhase?.({ type: "tool_call", agentId, call });
+        const result = toolExecutor
+          ? await toolExecutor(call, {
+              messages: [...messages],
+              agentId,
+              prompt,
+            })
+          : await executeToolCall(call);
 
         // File change review gate for str_replace and write_file
         if (
@@ -665,7 +712,7 @@ export class BaseAgent {
           if (feedback.decision === "feedback") {
             // Append user feedback to the tool result
             allToolResults.push(result);
-            onPhase?.({ type: "tool_result", result });
+            onPhase?.({ type: "tool_result", agentId, result });
             resultBlocks.push(`<tool_result name="${call.name}" id="${call.id}">\n${result.output}\nUser feedback: ${feedback.message}\n</tool_result>`);
             continue;
           }
@@ -673,7 +720,19 @@ export class BaseAgent {
         }
 
         allToolResults.push(result);
-        onPhase?.({ type: "tool_result", result });
+        onPhase?.({ type: "tool_result", agentId, result });
+
+        if (call.name === "set_output") {
+          forcedFinalOutput = normalizeToolOutputValue(call.parameters["data"]);
+        }
+
+        if (call.name === "task_completed") {
+          const summary = normalizeToolOutputValue(call.parameters["summary"]);
+          if (summary && !forcedFinalOutput) {
+            forcedFinalOutput = summary;
+          }
+          taskCompleted = true;
+        }
 
         resultBlocks.push(`<tool_result name="${result.name}" id="${result.id}">\n${result.output}\n</tool_result>`);
       }
@@ -682,6 +741,11 @@ export class BaseAgent {
       // always alternates between roles (user → assistant → user → …).
       if (resultBlocks.length > 0) {
         messages.push({ role: "user", content: resultBlocks.join("\n\n") });
+      }
+
+      if (taskCompleted) {
+        finalText = forcedFinalOutput ?? (textContent.trim() || text.trim());
+        break;
       }
     }
 

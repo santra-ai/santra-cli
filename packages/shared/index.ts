@@ -13,6 +13,30 @@ export type {
   SwarmState,
   CompletionRequest,
 } from "./types/types.ts";
+export type {
+  AgentOutputMode,
+  AgentSchemaProperty,
+  AgentJsonSchema,
+  ProgrammaticToolCall,
+  StepText,
+  GenerateN,
+  AgentStateView,
+  AgentStepContext,
+  StepExecutionResult,
+  StepGeneratorYield,
+  StepGeneratorLike,
+  AgentHandleSteps,
+  AgentTemplate,
+  LoadedAgentTemplates,
+} from "./types/agents.ts";
+export {
+  isProgrammaticToolCall,
+  isStepText,
+  isGenerateN,
+  isStepGeneratorYield,
+  normalizeStructuredOutput,
+  buildToolCallRequest,
+} from "./types/agents.ts";
 
 export { AVAILABLE_MODELS } from "./constants/models.ts";
 export type { AvailableModelId } from "./constants/models.ts";

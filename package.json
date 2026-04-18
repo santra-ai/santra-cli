@@ -1,6 +1,6 @@
 {
   "name": "santra-project",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "description": "Santra monorepo for CLI, web, backend, and shared packages.",
   "private": true,
   "type": "module",
