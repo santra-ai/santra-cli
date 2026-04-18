@@ -318,10 +318,17 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
     description:
       "Request clarification from the user. In the current CLI this is recorded as a paused question block.",
     parameters: {
+      questions: {
+        type: "string",
+        description:
+          "JSON array string of questions, each like {\"question\": string, \"header\"?: string, \"options\"?: [{\"label\": string, \"description\"?: string}]}.",
+        required: true,
+      },
       question: {
         type: "string",
-        description: "Question to ask the user.",
-        required: true,
+        description:
+          "Legacy single-question form. Prefer 'questions' instead of 'question'.",
+        required: false,
       },
     },
   },

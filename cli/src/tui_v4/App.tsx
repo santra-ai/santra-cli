@@ -80,11 +80,15 @@ export function App() {
     stats,
     busy,
     savedChats,
+    pendingApproval,
+    pendingQuestion,
     submit,
     resume,
     clearLog,
     handleCommand,
     abortCurrentRun,
+    resolveApproval,
+    resolveQuestion,
   } = useAgent();
 
   // ─── Cumulative log (accumulates finished runs within this session) ───────
@@ -136,6 +140,7 @@ export function App() {
   // ─── Input state ──────────────────────────────────────────────────────────
   const [inputValue, setInputValue] = useState("");
   const [selectedSuggestion, setSelectedSuggestion] = useState(0);
+  const [approvalFeedbackMode, setApprovalFeedbackMode] = useState(false);
   const [interactionMode, setInteractionMode] =
     useState<InteractionMode>("scroll");
 
@@ -143,6 +148,18 @@ export function App() {
     () => getSlashSuggestions(inputValue, savedChats),
     [inputValue, savedChats],
   );
+
+  useEffect(() => {
+    if (!pendingApproval) {
+      setApprovalFeedbackMode(false);
+    }
+  }, [pendingApproval]);
+
+  useEffect(() => {
+    if (!pendingQuestion) {
+      setInputValue("");
+    }
+  }, [pendingQuestion]);
 
   useEffect(() => {
     setSelectedSuggestion((c) =>
@@ -153,6 +170,7 @@ export function App() {
   const resetComposer = () => {
     setInputValue("");
     setSelectedSuggestion(0);
+    setApprovalFeedbackMode(false);
   };
 
   // ─── Transcript rows ──────────────────────────────────────────────────────
@@ -363,6 +381,100 @@ export function App() {
       return;
     }
 
+    if (pendingQuestion) {
+      if (key.escape) {
+        if (inputValue) {
+          setInputValue("");
+        }
+        return;
+      }
+
+      if (
+        key.backspace ||
+        key.delete ||
+        input === "\u007f" ||
+        input === "\b" ||
+        (key.ctrl && input?.toLowerCase() === "h")
+      ) {
+        setInputValue((c) => c.slice(0, -1));
+        return;
+      }
+
+      if (key.return || input === "\r" || input === "\n") {
+        const answer = inputValue.trim();
+        if (answer) {
+          resolveQuestion(answer);
+          resetComposer();
+        }
+        return;
+      }
+
+      const composerInput = sanitizeComposerInput(input);
+      if (composerInput && !key.ctrl && !key.meta) {
+        setInputValue((c) => `${c}${composerInput}`);
+      }
+      return;
+    }
+
+    if (pendingApproval) {
+      if (key.escape) {
+        if (inputValue) resetComposer();
+        return;
+      }
+
+      if (
+        key.backspace ||
+        key.delete ||
+        input === "\u007f" ||
+        input === "\b" ||
+        (key.ctrl && input?.toLowerCase() === "h")
+      ) {
+        setInputValue((c) => c.slice(0, -1));
+        return;
+      }
+
+      if (key.return || input === "\r" || input === "\n") {
+        const feedback = inputValue.trim();
+        if (feedback && approvalFeedbackMode) {
+          resolveApproval("feedback", feedback);
+          resetComposer();
+        }
+        return;
+      }
+
+      if (!key.ctrl && !key.meta) {
+        if (input === "y" || input === "Y") {
+          resolveApproval("allow");
+          resetComposer();
+          return;
+        }
+        if (input === "a") {
+          resolveApproval("allow_all");
+          resetComposer();
+          return;
+        }
+        if (input === "r" || input === "R") {
+          resolveApproval("reject");
+          resetComposer();
+          return;
+        }
+        if (input === "f" || input === "F") {
+          setApprovalFeedbackMode(true);
+          setInputValue("");
+          return;
+        }
+      }
+
+      const composerInput = sanitizeComposerInput(input);
+      if (composerInput && !key.ctrl && !key.meta) {
+        if (!approvalFeedbackMode) {
+          setApprovalFeedbackMode(true);
+        }
+        setInputValue((c) => `${c}${composerInput}`);
+      }
+      return;
+    }
+
     if (key.escape) {
       if (inputValue) resetComposer();
       else if (busy) abortCurrentRun("keyboard");
@@ -514,6 +626,9 @@ export function App() {
           selectedSuggestionIdx={selectedSuggestion}
           stats={stats}
           width={termWidth}
+          pendingApproval={pendingApproval}
+          pendingQuestion={pendingQuestion}
+          approvalFeedbackMode={approvalFeedbackMode}
         />
       </Box>
     </Box>

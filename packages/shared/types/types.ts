@@ -98,6 +98,7 @@ export type SwarmState = {
   finalOutput: string;
   toolCallResults: ToolCallResult[];
   thinkingSteps: ThinkingStep[];
+  messages: Message[];
   error?: string;
 };
 

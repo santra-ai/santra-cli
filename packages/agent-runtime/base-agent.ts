@@ -10,6 +10,7 @@ import type {
   AgentId,
   ToolName,
 } from "@santra/shared";
+import { getToolDefinition } from "@santra/shared";
 import { StreamParser, sanitizeJsonLiterals } from "./tools/parser.ts";
 import { executeToolCall } from "./tools/local-runner.ts";
 
@@ -17,6 +18,17 @@ export type FileChangeFeedback =
   | { decision: "keep" }
   | { decision: "revert" }
   | { decision: "feedback"; message: string };
+
+export type UserQuestionOption = {
+  label: string;
+  description?: string;
+};
+
+export type UserQuestion = {
+  question: string;
+  header?: string;
+  options?: UserQuestionOption[];
+};
 
 export type AgentRunOptions = {
   prompt: string;
@@ -35,6 +47,7 @@ export type AgentRunOptions = {
     oldStr: string,
     newStr: string,
   ) => Promise<FileChangeFeedback>;
+  onUserQuestion?: (questions: UserQuestion[]) => Promise<string>;
   toolExecutor?: (
     call: ToolCallRequest,
     context: { messages: Message[]; agentId: AgentId; prompt: string },
@@ -144,6 +157,51 @@ function normalizeToolOutputValue(value: unknown): string {
   return String(value);
 }
 
+function parseMessageArray(value: unknown): Message[] | null {
+  if (typeof value === "string") {
+    try {
+      return JSON.parse(value) as Message[];
+    } catch {
+      return null;
+    }
+  }
+  if (Array.isArray(value)) {
+    return value as Message[];
+  }
+  return null;
+}
+
+function parseAskUserQuestions(parameters: Record<string, unknown>): UserQuestion[] {
+  const rawQuestions = parameters["questions"];
+  const singleQuestion = typeof parameters["question"] === "string"
+    ? parameters["question"].trim()
+    : "";
+
+  let questions: UserQuestion[] = [];
+
+  if (typeof rawQuestions === "string") {
+    try {
+      questions = JSON.parse(rawQuestions) as UserQuestion[];
+    } catch {
+      questions = [];
+    }
+  } else if (Array.isArray(rawQuestions)) {
+    questions = rawQuestions as UserQuestion[];
+  }
+
+  if (!questions.length && singleQuestion) {
+    questions = [{ question: singleQuestion }];
+  }
+
+  return questions.filter(
+    (question): question is UserQuestion =>
+      !!question &&
+      typeof question === "object" &&
+      typeof question.question === "string" &&
+      question.question.trim().length > 0,
+  );
+}
+
 function isBroadRepoExplanationPrompt(prompt: string): boolean {
   const lower = prompt.toLowerCase();
   return (
@@ -171,6 +229,17 @@ function isPrematureRepoExplanation(text: string): boolean {
     lower.includes("thanks for providing") ||
     lower.includes("to understand the codebase")
   );
+}
+
+function stripNonResponseMarkup(text: string): string {
+  return text
+    .replace(/<think\b[^>]*>[\s\S]*?<\/think>/gi, "")
+    .replace(/<status\b[^>]*>[\s\S]*?<\/status>/gi, "")
+    .replace(/<next\b[^>]*>[\s\S]*?<\/next>/gi, "")
+    .replace(/<tool_call\b[^>]*>[\s\S]*?<\/tool_call>/gi, "")
+    .replace(/<tool_result\b[^>]*>[\s\S]*?<\/tool_result>/gi, "")
+    .replace(/<\/?(?:tool_call|tool_result|think|status|next)\b[^>]*>/gi, "")
+    .trim();
 }
 
 function extractJsonObjects(text: string): string[] {
@@ -282,6 +351,117 @@ function recoverToolCallFromText(
   }
 
   return null;
+}
+
+function firstString(
+  params: Record<string, unknown>,
+  keys: string[],
+): string | undefined {
+  for (const key of keys) {
+    const value = params[key];
+    if (typeof value === "string" && value.trim()) {
+      return value;
+    }
+  }
+  return undefined;
+}
+
+function normalizeToolCall(call: ToolCallRequest): ToolCallRequest {
+  const parameters = { ...call.parameters };
+
+  const pathAlias = firstString(parameters, [
+    "path",
+    "file",
+    "file_path",
+    "filepath",
+    "pathname",
+    "target",
+    "dir",
+    "directory",
+    "source",
+  ]);
+  if (pathAlias && typeof parameters["path"] !== "string") {
+    parameters["path"] = pathAlias;
+  }
+
+  const patternAlias = firstString(parameters, [
+    "pattern",
+    "glob",
+    "file_pattern",
+    "path_glob",
+  ]);
+  if (patternAlias && typeof parameters["pattern"] !== "string") {
+    parameters["pattern"] = patternAlias;
+  }
+
+  const queryAlias = firstString(parameters, [
+    "query",
+    "search",
+    "term",
+    "text",
+    "needle",
+  ]);
+  if (queryAlias && typeof parameters["query"] !== "string") {
+    parameters["query"] = queryAlias;
+  }
+
+  const commandAlias = firstString(parameters, ["command", "cmd"]);
+  if (commandAlias && typeof parameters["command"] !== "string") {
+    parameters["command"] = commandAlias;
+  }
+
+  const contentAlias = firstString(parameters, ["content", "text", "body"]);
+  if (contentAlias && typeof parameters["content"] !== "string") {
+    parameters["content"] = contentAlias;
+  }
+
+  const oldStringAlias = firstString(parameters, [
+    "old_string",
+    "old",
+    "old_text",
+    "oldText",
+  ]);
+  if (oldStringAlias && typeof parameters["old_string"] !== "string") {
+    parameters["old_string"] = oldStringAlias;
+  }
+
+  const newStringAlias = firstString(parameters, [
+    "new_string",
+    "new",
+    "replacement",
+    "new_text",
+    "newText",
+  ]);
+  if (newStringAlias && typeof parameters["new_string"] !== "string") {
+    parameters["new_string"] = newStringAlias;
+  }
+
+  const sourceAlias = firstString(parameters, ["source", "url"]);
+  if (sourceAlias && typeof parameters["source"] !== "string") {
+    parameters["source"] = sourceAlias;
+  }
+
+  return {
+    ...call,
+    parameters,
+  };
+}
+
+function getMissingRequiredParams(call: ToolCallRequest): string[] {
+  const definition = getToolDefinition(call.name);
+  if (!definition) return [];
+
+  return Object.entries(definition.parameters)
+    .filter(([, schema]) => schema.required)
+    .map(([name]) => name)
+    .filter((name) => {
+      const value = call.parameters[name];
+      return (
+        value === undefined ||
+        value === null ||
+        (typeof value === "string" && value.trim().length === 0)
+      );
+    });
 }
 
 // ─── BaseAgent ────────────────────────────────────────────────────────────────
@@ -452,6 +632,7 @@ export class BaseAgent {
       maxToolIterations = 8,
       abortSignal,
       onFileChangeReview,
+      onUserQuestion,
       toolExecutor,
     } = options;
 
@@ -482,6 +663,7 @@ export class BaseAgent {
     let repoReadNudges = 0;
     let forcedFinalOutput: string | undefined;
     let taskCompleted = false;
+    let consecutiveFailedToolOnlyTurns = 0;
 
     // Cache original file content for write_file reverts: callId → originalContent
     const originalFileContent = new Map<string, string>();
@@ -617,6 +799,7 @@ export class BaseAgent {
 
       if (toolCalls.length === 0) {
         const candidateFinalText = textContent.trim() || text.trim();
+        const visibleFinalText = stripNonResponseMarkup(candidateFinalText);
         const successfulResults = allToolResults.filter((result) => !result.error);
         const readFileCount = successfulResults.filter((result) => result.name === "read_file").length;
         const directoryCount = successfulResults.filter((result) => result.name === "list_directory").length;
@@ -636,7 +819,16 @@ export class BaseAgent {
           continue;
         }
 
-        finalText = textContent.trim() || text.trim();
+        if (!visibleFinalText) {
+          messages.push({
+            role: "user" as const,
+            content:
+              "You only emitted progress updates. Continue by calling the next tool or writing the final answer.",
+          });
+          continue;
+        }
+
+        finalText = visibleFinalText;
         break;
       }
 
@@ -644,7 +836,19 @@ export class BaseAgent {
       // one user message to avoid consecutive same-role messages (which NVIDIA
       // NIM rejects with 422, surfaced as 502 from the web route).
       const resultBlocks: string[] = [];
-      for (const call of toolCalls) {
+      const invalidToolFeedbackBlocks: string[] = [];
+      let successfulToolCallsThisTurn = 0;
+      let failedToolCallsThisTurn = 0;
+      for (const originalCall of toolCalls) {
+        const call = normalizeToolCall(originalCall);
+        const missingParams = getMissingRequiredParams(call);
+        if (missingParams.length > 0) {
+          invalidToolFeedbackBlocks.push(
+            `<tool_result name="${call.name}" id="${call.id}">\nInvalid tool call: missing required parameter(s): ${missingParams.join(", ")}. Retry the same tool with valid JSON arguments. If you do not know the path yet, inspect the repository first instead of sending empty {}.\n</tool_result>`,
+          );
+          continue;
+        }
+
         // For write_file, cache original content before overwriting for potential revert
         if (call.name === "write_file" && onFileChangeReview) {
           const filePath = call.parameters["path"] as string | undefined;
@@ -660,13 +864,27 @@ export class BaseAgent {
         }
 
         onPhase?.({ type: "tool_call", agentId, call });
-        const result = toolExecutor
-          ? await toolExecutor(call, {
-              messages: [...messages],
-              agentId,
-              prompt,
-            })
-          : await executeToolCall(call);
+        const result =
+          call.name === "ask_user" && onUserQuestion
+            ? {
+                id: call.id,
+                name: call.name,
+                output: JSON.stringify({
+                  paused: false,
+                  supported: true,
+                  questions: parseAskUserQuestions(call.parameters),
+                  answer: await onUserQuestion(
+                    parseAskUserQuestions(call.parameters),
+                  ),
+                }),
+              }
+            : toolExecutor
+              ? await toolExecutor(call, {
+                  messages: [...messages],
+                  agentId,
+                  prompt,
+                })
+              : await executeToolCall(call);
 
         // File change review gate for str_replace and write_file
         if (
@@ -713,6 +931,7 @@ export class BaseAgent {
             // Append user feedback to the tool result
             allToolResults.push(result);
             onPhase?.({ type: "tool_result", agentId, result });
+            successfulToolCallsThisTurn += 1;
             resultBlocks.push(`<tool_result name="${call.name}" id="${call.id}">\n${result.output}\nUser feedback: ${feedback.message}\n</tool_result>`);
             continue;
           }
@@ -721,9 +940,20 @@ export class BaseAgent {
 
         allToolResults.push(result);
         onPhase?.({ type: "tool_result", agentId, result });
+        if (result.error) failedToolCallsThisTurn += 1;
+        else successfulToolCallsThisTurn += 1;
 
         if (call.name === "set_output") {
           forcedFinalOutput = normalizeToolOutputValue(call.parameters["data"]);
+        }
+
+        if (call.name === "set_messages") {
+          const parsed = parseMessageArray(call.parameters["messages"]);
+          const mode =
+            call.parameters["mode"] === "append" ? "append" : "replace";
+          if (parsed) {
+            messages = mode === "append" ? [...messages, ...parsed] : [...parsed];
+          }
         }
 
         if (call.name === "task_completed") {
@@ -739,8 +969,26 @@ export class BaseAgent {
 
       // Push all tool results as a single user message so the message array
       // always alternates between roles (user → assistant → user → …).
-      if (resultBlocks.length > 0) {
-        messages.push({ role: "user", content: resultBlocks.join("\n\n") });
+      if (resultBlocks.length > 0 || invalidToolFeedbackBlocks.length > 0) {
+        messages.push({
+          role: "user",
+          content: [...resultBlocks, ...invalidToolFeedbackBlocks].join("\n\n"),
+        });
+      }
+
+      if (successfulToolCallsThisTurn === 0 && failedToolCallsThisTurn > 0) {
+        consecutiveFailedToolOnlyTurns += 1;
+      } else {
+        consecutiveFailedToolOnlyTurns = 0;
+      }
+
+      if (consecutiveFailedToolOnlyTurns >= 2) {
+        messages.push({
+          role: "user",
+          content:
+            "Several recent tool calls failed without yielding new context. Re-evaluate your approach. Use confirmed paths from list_directory results, avoid repeating missing-file lookups, and prefer read_subtree, list_directory, read_file, or code_search/search_text only when their required parameters are present.",
+        });
+        consecutiveFailedToolOnlyTurns = 0;
       }
 
       if (taskCompleted) {

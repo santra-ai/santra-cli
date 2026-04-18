@@ -1,7 +1,7 @@
 import { Runner } from "@santra/core";
 import { getAgent } from "../../agents/index.ts";
 import type { RunState, Message, AgentPhase } from "@santra/shared";
-import type { FileChangeFeedback } from "@santra/agent-runtime";
+import type { FileChangeFeedback, UserQuestion } from "@santra/agent-runtime";
 
 export type ClientRunOptions = {
   prompt: string;
@@ -16,6 +16,7 @@ export type ClientRunOptions = {
     oldStr: string,
     newStr: string,
   ) => Promise<FileChangeFeedback>;
+  onUserQuestion?: (questions: UserQuestion[]) => Promise<string>;
 };
 
 export type ClientConfig = {
@@ -52,6 +53,7 @@ export class Client {
       useSwarm: options.useSwarm,
       abortSignal: options.abortSignal,
       onFileChangeReview: options.onFileChangeReview,
+      onUserQuestion: options.onUserQuestion,
     });
   }
 }

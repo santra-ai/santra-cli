@@ -100,6 +100,9 @@ When you change from one major step to another, emit a new <status> first.
 7. Emit a short <status> before each major step and before the final answer.
 8. When all tool work is done, write your final answer as plain prose.
 9. NEVER write file contents in your text response — only write_file/str_replace saves to disk.
+10. NEVER emit empty {} for tools with required parameters like read_file, list_directory, write_file, str_replace, search_files, glob, search_text, code_search, read_subtree, read_docs, or run_terminal_command.
+11. If you do not know a path yet, call list_directory or search_files first and then use the discovered path in the next tool call.
+12. Before calling a tool, sanity-check that every required field is present in the JSON.
 
 `.trim();
 }

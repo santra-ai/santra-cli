@@ -84,6 +84,7 @@ const NEXT_OPEN = "<next>";
 const NEXT_CLOSE = "</next>";
 const TOOL_OPEN_PREFIX = "<tool_call";
 const TOOL_CLOSE = "</tool_call>";
+const TOOL_RESULT_OPEN = "<tool_result";
 
 function normalizeAgentMarkup(text: string): string {
   return text
@@ -304,9 +305,22 @@ export class StreamParser {
       } else {
         // in_tool
         const ci = this.buffer.indexOf(TOOL_CLOSE);
-        if (ci === -1) break;
+        const recoveryIdx = this.findRecoveryTagIndex([
+          THINKING_OPEN,
+          STATUS_OPEN,
+          NEXT_OPEN,
+          TOOL_OPEN_PREFIX,
+          TOOL_RESULT_OPEN,
+        ]);
+        if (ci === -1 && recoveryIdx === -1) break;
 
-        const raw = this.buffer.slice(0, ci).trim();
+        const endIdx =
+          ci !== -1 && (recoveryIdx === -1 || ci <= recoveryIdx)
+            ? ci
+            : recoveryIdx;
+        if (endIdx === -1) break;
+
+        const raw = this.buffer.slice(0, endIdx).trim();
         const params: Record<string, unknown> = (raw ? tryParseJson(raw) : null) ?? {};
 
         if (this.currentToolName) {
@@ -321,7 +335,11 @@ export class StreamParser {
           });
         }
 
-        this.buffer = this.buffer.slice(ci + TOOL_CLOSE.length);
+        if (ci !== -1 && endIdx === ci) {
+          this.buffer = this.buffer.slice(ci + TOOL_CLOSE.length);
+        } else {
+          this.buffer = this.buffer.slice(endIdx);
+        }
         this.state = "idle";
         this.currentToolName = null;
       }

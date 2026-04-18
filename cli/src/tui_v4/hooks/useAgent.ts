@@ -5,7 +5,7 @@ import type {
   RunState,
   ToolCallResult,
 } from "@santra/shared";
-import type { FileChangeFeedback } from "@santra/agent-runtime";
+import type { FileChangeFeedback, UserQuestion } from "@santra/agent-runtime";
 import { Client } from "../../client.ts";
 import {
   createChatId,
@@ -33,6 +33,11 @@ function timeStamp(): string {
 function makeId(): string {
   return Math.random().toString(36).substring(2, 8);
 }
+
+const EMPTY_RUN_FALLBACK =
+  "I finished the run, but I did not produce a visible final response.";
+const FIRST_ACTIVITY_TIMEOUT_MS = 30_000;
+const IDLE_ACTIVITY_TIMEOUT_MS = 45_000;
 
 type LiveStreamMode = "text" | "think" | "status" | "next";
 
@@ -95,6 +100,40 @@ function pathDepth(path: string): number {
 
 function pathName(path: string): string {
   return path.split("/").pop() ?? path;
+}
+
+function buildErroredRunState(
+  previousState: RunState | undefined,
+  prompt: string,
+  error: string,
+): RunState {
+  const previousMessages = previousState?.messages ?? [];
+  const nextMessages = [...previousMessages];
+  const trimmedPrompt = prompt.trim();
+
+  if (
+    trimmedPrompt &&
+    !nextMessages.some(
+      (message) =>
+        message.role === "user" && message.content.trim() === trimmedPrompt,
+    )
+  ) {
+    nextMessages.push({ role: "user", content: prompt });
+  }
+
+  nextMessages.push({
+    role: "assistant",
+    content: [
+      `Continuation context for: ${prompt}`,
+      `Last error: ${error}`,
+      "Resume from this exact point. Use the prior repository context and do not restart unnecessarily.",
+    ].join("\n"),
+  });
+
+  return {
+    messages: nextMessages,
+    output: { type: "error", message: error },
+  };
 }
 
 function labelForAgent(id: string): string {
@@ -178,11 +217,30 @@ export interface UseAgentReturn {
   busy: boolean;
   chatId: string;
   savedChats: StoredChatSummary[];
+  pendingApproval: PendingApproval | null;
+  pendingQuestion: PendingQuestion | null;
   submit: (prompt: string) => Promise<void>;
   resume: (chatId?: string) => void;
   clearLog: () => void;
   handleCommand: (cmd: string, arg?: string) => void;
   abortCurrentRun: (source: "slash" | "keyboard") => void;
+  resolveApproval: (decision: ApprovalDecision, message?: string) => void;
+  resolveQuestion: (answer: string) => void;
+}
+
+export type ApprovalDecision = "allow" | "reject" | "allow_all" | "feedback";
+
+export interface PendingApproval {
+  callId: string;
+  filePath: string;
+  summary: string;
+  diff: DiffEntry;
+}
+
+export interface PendingQuestion {
+  prompt: string;
+  header?: string;
+  options: Array<{ label: string; description?: string }>;
 }
 
 export default function useAgent(): UseAgentReturn {
@@ -195,6 +253,12 @@ export default function useAgent(): UseAgentReturn {
   const [chatId, setChatId] = useState(() => createChatId());
   const [savedChats, setSavedChats] = useState<StoredChatSummary[]>(() =>
     listSavedChats(),
+  );
+  const [pendingApproval, setPendingApproval] = useState<PendingApproval | null>(
+    null,
+  );
+  const [pendingQuestion, setPendingQuestion] = useState<PendingQuestion | null>(
+    null,
   );
 
   const clientRef = useRef(new Client());
@@ -211,18 +275,40 @@ export default function useAgent(): UseAgentReturn {
   const seqRef = useRef(0);
   const abortSourceRef = useRef<"slash" | "keyboard">("slash");
   const activeAgentIdRef = useRef("unknown");
+  const approvalResolverRef = useRef<
+    | ((feedback: FileChangeFeedback) => void)
+    | undefined
+  >(undefined);
+  const questionResolverRef = useRef<((answer: string) => void) | undefined>(
+    undefined,
+  );
+  const approvalCacheRef = useRef<{
+    allowAll: boolean;
+    allowedFiles: Set<string>;
+  }>({
+    allowAll: false,
+    allowedFiles: new Set<string>(),
+  });
   const liveStreamModeRef = useRef<LiveStreamMode>("text");
   const liveStreamPendingRef = useRef("");
   const liveStatusBufferRef = useRef("");
   const liveNextBufferRef = useRef("");
   const sawRealtimeThinkingRef = useRef(false);
   const sawRealtimeResponseRef = useRef(false);
+  const sawInteractivePromptRef = useRef(false);
+  const activityTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(
+    undefined,
+  );
+  const sawRunActivityRef = useRef(false);
+  const timedOutRunRef = useRef(false);
 
   // Flush timer cleanup on unmount
   useEffect(
     () => () => {
       if (flushTimerRef.current !== undefined)
         clearTimeout(flushTimerRef.current);
+      if (activityTimerRef.current !== undefined)
+        clearTimeout(activityTimerRef.current);
     },
     [],
   );
@@ -236,6 +322,35 @@ export default function useAgent(): UseAgentReturn {
       setLog(logDeriverRef.current.getLog());
     }, 8);
   }, []);
+
+  const clearActivityTimer = useCallback(() => {
+    if (activityTimerRef.current !== undefined) {
+      clearTimeout(activityTimerRef.current);
+      activityTimerRef.current = undefined;
+    }
+  }, []);
+
+  const armActivityTimer = useCallback(
+    (controller: AbortController, ms: number) => {
+      clearActivityTimer();
+      activityTimerRef.current = setTimeout(() => {
+        timedOutRunRef.current = true;
+        abortSourceRef.current = "slash";
+        controller.abort();
+      }, ms);
+    },
+    [clearActivityTimer],
+  );
+
+  const noteRunActivity = useCallback(
+    (controller?: AbortController) => {
+      sawRunActivityRef.current = true;
+      if (controller) {
+        armActivityTimer(controller, IDLE_ACTIVITY_TIMEOUT_MS);
+      }
+    },
+    [armActivityTimer],
+  );
 
   const appendEvent = useCallback(
     (event: Parameters<LogDeriver["processEvent"]>[0]) => {
@@ -733,17 +848,123 @@ export default function useAgent(): UseAgentReturn {
 
   const onFileChangeReview = useCallback(
     (
-      _callId: string,
+      callId: string,
       filePath: string,
       oldStr: string,
       newStr: string,
     ): Promise<FileChangeFeedback> => {
       const diff: DiffEntry = buildDiff(filePath, oldStr, newStr, 3);
-      appendEvent(makeEvent({ type: "diff_collected", filePath, diff }));
-      return Promise.resolve({ decision: "keep" as const });
+
+      if (
+        approvalCacheRef.current.allowAll ||
+        approvalCacheRef.current.allowedFiles.has(filePath)
+      ) {
+        return Promise.resolve({ decision: "keep" as const });
+      }
+
+      const summary =
+        diff.added === 0 && diff.removed === 0
+          ? `Update ${filePath}`
+          : `Update ${filePath} (+${diff.added} -${diff.removed})`;
+
+      return new Promise<FileChangeFeedback>((resolve) => {
+        sawInteractivePromptRef.current = true;
+        approvalResolverRef.current = resolve;
+        setPendingApproval({
+          callId,
+          filePath,
+          summary,
+          diff,
+        });
+      });
     },
     [appendEvent],
   );
+
+  const resolveApproval = useCallback(
+    (decision: ApprovalDecision, message?: string) => {
+      const pending = pendingApproval;
+      const resolver = approvalResolverRef.current;
+      if (!pending || !resolver) return;
+
+      approvalResolverRef.current = undefined;
+      setPendingApproval(null);
+
+      if (decision === "allow_all") {
+        approvalCacheRef.current.allowAll = true;
+        approvalCacheRef.current.allowedFiles.add(pending.filePath);
+        resolver({ decision: "keep" });
+        return;
+      }
+
+      if (decision === "allow") {
+        approvalCacheRef.current.allowedFiles.add(pending.filePath);
+        resolver({ decision: "keep" });
+        return;
+      }
+
+      if (decision === "feedback") {
+        const feedback = message?.trim();
+        if (!feedback) {
+          setPendingApproval(pending);
+          approvalResolverRef.current = resolver;
+          return;
+        }
+        resolver({ decision: "feedback", message: feedback });
+        return;
+      }
+
+      resolver({ decision: "revert" });
+    },
+    [pendingApproval],
+  );
+
+  const onUserQuestion = useCallback(
+    (questions: UserQuestion[]): Promise<string> => {
+      const first = questions.find(
+        (question) => typeof question.question === "string" && question.question.trim(),
+      );
+      if (!first) return Promise.resolve("");
+
+      return new Promise<string>((resolve) => {
+        sawInteractivePromptRef.current = true;
+        questionResolverRef.current = resolve;
+        setPendingQuestion({
+          prompt: first.question.trim(),
+          header:
+            typeof first.header === "string" && first.header.trim()
+              ? first.header.trim()
+              : undefined,
+          options: Array.isArray(first.options)
+            ? first.options
+                .filter(
+                  (option): option is { label: string; description?: string } =>
+                    !!option &&
+                    typeof option === "object" &&
+                    typeof option.label === "string" &&
+                    option.label.trim().length > 0,
+                )
+                .map((option) => ({
+                  label: option.label.trim(),
+                  ...(typeof option.description === "string" &&
+                  option.description.trim()
+                    ? { description: option.description.trim() }
+                    : {}),
+                }))
+            : [],
+        });
+      });
+    },
+    [],
+  );
+
+  const resolveQuestion = useCallback((answer: string) => {
+    const resolver = questionResolverRef.current;
+    if (!resolver) return;
+    questionResolverRef.current = undefined;
+    setPendingQuestion(null);
+    resolver(answer.trim());
+  }, []);
 
   const submit = useCallback(
     async (prompt: string) => {
@@ -771,10 +992,23 @@ export default function useAgent(): UseAgentReturn {
       liveNextBufferRef.current = "";
       sawRealtimeThinkingRef.current = false;
       sawRealtimeResponseRef.current = false;
+      sawInteractivePromptRef.current = false;
+      sawRunActivityRef.current = false;
+      timedOutRunRef.current = false;
       logDeriverRef.current.reset();
       runIdRef.current = makeId();
       seqRef.current = 0;
       abortSourceRef.current = "slash";
+      if (approvalResolverRef.current) {
+        approvalResolverRef.current({ decision: "revert" });
+        approvalResolverRef.current = undefined;
+      }
+      setPendingApproval(null);
+      if (questionResolverRef.current) {
+        questionResolverRef.current("");
+        questionResolverRef.current = undefined;
+      }
+      setPendingQuestion(null);
 
       appendEvent(makeEvent({ type: "user_message", content: prompt }));
       appendEvent(makeEvent({ type: "run_started" }));
@@ -784,6 +1018,7 @@ export default function useAgent(): UseAgentReturn {
 
       const controller = new AbortController();
       abortControllerRef.current = controller;
+      armActivityTimer(controller, FIRST_ACTIVITY_TIMEOUT_MS);
 
       try {
         let doneEmitted = false;
@@ -792,6 +1027,7 @@ export default function useAgent(): UseAgentReturn {
         const wrappedOnPhase = (phase: Parameters<typeof onPhase>[0]) => {
           if (phase.type === "thinking" && sawRealtimeThinkingRef.current)
             return;
+          noteRunActivity(controller);
           if (phase.type === "done") doneEmitted = true;
           onPhase(phase);
         };
@@ -817,11 +1053,13 @@ export default function useAgent(): UseAgentReturn {
           prompt,
           previousState: runStateRef.current,
           onDelta: (chunk) => {
+            noteRunActivity(controller);
             handleRealtimeDelta(chunk);
           },
           onPhase: wrappedOnPhase,
           abortSignal: controller.signal,
           onFileChangeReview,
+          onUserQuestion,
         });
 
         runStateRef.current = state;
@@ -837,20 +1075,51 @@ export default function useAgent(): UseAgentReturn {
           }
         } else if (state.output.type === "text") {
           const content = cleanAgentResponse(state.output.content.trim());
-          const finalOutput =
-            content ||
-            "I finished the run, but I did not produce a visible final response.";
-          if (!sawRealtimeResponseRef.current && finalOutput) {
+          const finalOutput = content || EMPTY_RUN_FALLBACK;
+          const isBrokenEmptyCompletion =
+            finalOutput === EMPTY_RUN_FALLBACK &&
+            (!doneEmitted || sawInteractivePromptRef.current);
+
+          if (isBrokenEmptyCompletion) {
+            appendEvent(
+              makeEvent({
+                type: "run_failed",
+                message:
+                  "The run ended without a final response after waiting for input.",
+              }),
+            );
+            sessionLogger.log(
+              chatId,
+              "ERROR",
+              "The run ended without a final response after waiting for input.",
+            );
+          } else {
+            if (!sawRealtimeResponseRef.current && finalOutput) {
             await simulateStreaming(finalOutput);
+            }
+            appendEvent(
+              makeEvent({ type: "run_completed", finalOutput }),
+            );
+            sessionLogger.log(chatId, "RESPONSE", finalOutput);
           }
-          appendEvent(
-            makeEvent({ type: "run_completed", finalOutput }),
-          );
-          sessionLogger.log(chatId, "RESPONSE", finalOutput);
         }
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        if (!controller.signal.aborted) {
+        const message = timedOutRunRef.current
+          ? sawRunActivityRef.current
+            ? "The run stalled without making progress and was stopped."
+            : "The run did not produce any activity and was stopped."
+          : err instanceof Error
+            ? err.message
+            : String(err);
+        const erroredState = buildErroredRunState(
+          runStateRef.current,
+          prompt,
+          message,
+        );
+        runStateRef.current = erroredState;
+        saveRunState({ chatId, state: erroredState });
+        setSavedChats(listSavedChats());
+        if (!controller.signal.aborted || timedOutRunRef.current) {
           setTasks((prev) =>
             prev.map((task) =>
               task.status === "active" ? { ...task, status: "error" } : task,
@@ -860,13 +1129,16 @@ export default function useAgent(): UseAgentReturn {
           sessionLogger.log(chatId, "ERROR", message);
         }
       } finally {
+        clearActivityTimer();
         if (controller.signal.aborted) {
-          appendEvent(
-            makeEvent({
-              type: "run_interrupted",
-              source: abortSourceRef.current,
-            }),
-          );
+          if (!timedOutRunRef.current) {
+            appendEvent(
+              makeEvent({
+                type: "run_interrupted",
+                source: abortSourceRef.current,
+              }),
+            );
+          }
         }
         // Flush any remaining buffered events immediately on run end
         if (flushTimerRef.current !== undefined) {
@@ -884,10 +1156,14 @@ export default function useAgent(): UseAgentReturn {
     [
       chatId,
       onFileChangeReview,
+      onUserQuestion,
       onPhase,
       appendEvent,
       startElapsedTimer,
       stopElapsedTimer,
+      armActivityTimer,
+      clearActivityTimer,
+      noteRunActivity,
     ],
   );
 
@@ -951,10 +1227,20 @@ export default function useAgent(): UseAgentReturn {
   }, []);
 
   const abortCurrentRun = useCallback((source: "slash" | "keyboard") => {
-    if (!abortControllerRef.current) return;
-    abortSourceRef.current = source;
-    abortControllerRef.current.abort();
-  }, []);
+      if (!abortControllerRef.current) return;
+      abortSourceRef.current = source;
+      if (approvalResolverRef.current) {
+        approvalResolverRef.current({ decision: "revert" });
+        approvalResolverRef.current = undefined;
+        setPendingApproval(null);
+      }
+      if (questionResolverRef.current) {
+        questionResolverRef.current("");
+        questionResolverRef.current = undefined;
+        setPendingQuestion(null);
+      }
+      abortControllerRef.current.abort();
+    }, []);
 
   const handleCommand = useCallback(
     (cmd: string, arg?: string) => {
@@ -1036,10 +1322,14 @@ export default function useAgent(): UseAgentReturn {
     busy,
     chatId,
     savedChats,
+    pendingApproval,
+    pendingQuestion,
     submit,
     resume,
     clearLog,
     handleCommand,
     abortCurrentRun,
+    resolveApproval,
+    resolveQuestion,
   };
 }

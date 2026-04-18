@@ -12,7 +12,7 @@ import { executeToolCall } from "./tools/local-runner.ts";
 import { getAgentTemplate, loadAgentTemplates } from "./agent-registry.ts";
 import { runProgrammaticAgent } from "./programmatic-runner.ts";
 
-import type { FileChangeFeedback } from "./base-agent.ts";
+import type { FileChangeFeedback, UserQuestion } from "./base-agent.ts";
 
 export type SwarmOptions = {
   task: string;
@@ -26,6 +26,7 @@ export type SwarmOptions = {
     oldStr: string,
     newStr: string,
   ) => Promise<FileChangeFeedback>;
+  onUserQuestion?: (questions: UserQuestion[]) => Promise<string>;
 };
 
 type AgentOutcome = {
@@ -104,7 +105,14 @@ export class Swarm {
   }
 
   async run(options: SwarmOptions): Promise<SwarmState> {
-    const { task, onPhase, abortSignal, onFileChangeReview, previousMessages } =
+    const {
+      task,
+      onPhase,
+      abortSignal,
+      onFileChangeReview,
+      onUserQuestion,
+      previousMessages,
+    } =
       options;
 
     const phases: AgentPhase[] = [];
@@ -342,6 +350,7 @@ export class Swarm {
             maxToolIterations: opts?.maxToolIterations ?? 20,
             abortSignal,
             onFileChangeReview,
+            onUserQuestion,
             onDelta: (chunk) => {
               emit({ type: "delta", agentId, content: chunk });
             },
@@ -356,6 +365,7 @@ export class Swarm {
             maxToolIterations: opts?.maxToolIterations ?? 20,
             abortSignal,
             onFileChangeReview,
+            onUserQuestion,
             onDelta: (chunk) => {
               emit({ type: "delta", agentId, content: chunk });
             },
@@ -401,6 +411,7 @@ export class Swarm {
         finalOutput: "",
         toolCallResults,
         thinkingSteps,
+        messages: previousMessages ?? [],
         error: "Aborted by user",
       };
     }
@@ -423,12 +434,19 @@ export class Swarm {
         finalOutput: "",
         toolCallResults,
         thinkingSteps,
+        messages: rootResult.messages,
         error: rootResult.error,
       };
     }
 
     const finalOutput = rootResult.output.trim() || fallbackFinalOutput(task);
     emit({ type: "done", finalOutput });
-    return { phases, finalOutput, toolCallResults, thinkingSteps };
+    return {
+      phases,
+      finalOutput,
+      toolCallResults,
+      thinkingSteps,
+      messages: rootResult.messages,
+    };
   }
 }

@@ -16,7 +16,7 @@ import {
   normalizeStructuredOutput,
 } from "@santra/shared";
 import type { AgentPhase, AgentId } from "@santra/shared";
-import type { BaseAgent, FileChangeFeedback } from "./base-agent.ts";
+import type { BaseAgent, FileChangeFeedback, UserQuestion } from "./base-agent.ts";
 import { executeToolCall } from "./tools/local-runner.ts";
 
 type ToolExecutionContext = {
@@ -41,6 +41,7 @@ export type ProgrammaticRunOptions = {
     oldStr: string,
     newStr: string,
   ) => Promise<FileChangeFeedback>;
+  onUserQuestion?: (questions: UserQuestion[]) => Promise<string>;
   onDelta?: (chunk: string) => void;
   onPhase?: (phase: AgentPhase) => void;
   toolExecutor?: (
@@ -115,6 +116,7 @@ export async function runProgrammaticAgent(
     maxToolIterations = 20,
     abortSignal,
     onFileChangeReview,
+    onUserQuestion,
     onDelta,
     onPhase,
     toolExecutor,
@@ -173,6 +175,7 @@ export async function runProgrammaticAgent(
         maxToolIterations: yielded === "STEP" ? 1 : maxToolIterations,
         abortSignal,
         onFileChangeReview,
+        onUserQuestion,
         onDelta,
         onPhase,
         appendPrompt: false,
@@ -221,6 +224,7 @@ export async function runProgrammaticAgent(
           maxToolIterations: 1,
           abortSignal,
           onFileChangeReview,
+          onUserQuestion,
           onDelta,
           onPhase,
           appendPrompt: false,

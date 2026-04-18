@@ -130,9 +130,8 @@ async function handleListDirectory(
 
 // Find files matching a glob pattern under a given working directory.
 async function handleSearchFiles(p: Record<string, unknown>): Promise<string> {
-  const pattern = p["pattern"] as string;
+  const pattern = (p["pattern"] as string | undefined) ?? (p["glob"] as string | undefined) ?? "**/*";
   const cwd = (p["cwd"] as string) ?? ".";
-  if (!pattern) throw new Error("search_files: 'pattern' is required");
   const absCwd = resolve(process.cwd(), cwd);
   const glob = new Bun.Glob(pattern);
   const files: string[] = [];
@@ -152,6 +151,86 @@ async function handleGlob(p: Record<string, unknown>): Promise<string> {
   return handleSearchFiles(p);
 }
 
+async function collectFilesForTextSearch(
+  cwd: string,
+  globPattern?: string,
+): Promise<string[]> {
+  const absCwd = resolve(process.cwd(), cwd);
+  const files: string[] = [];
+
+  if (globPattern) {
+    const glob = new Bun.Glob(globPattern);
+    for await (const file of glob.scan({ cwd: absCwd, onlyFiles: true })) {
+      files.push(file);
+    }
+    return files;
+  }
+
+  const walk = async (relPath: string) => {
+    const abs = resolve(absCwd, relPath);
+    const entries = await readdir(abs, { withFileTypes: true });
+    for (const entry of entries) {
+      if (IGNORED_NAMES.has(entry.name) || entry.name.startsWith(".")) continue;
+      const childRel = relPath ? join(relPath, entry.name) : entry.name;
+      if (entry.isDirectory()) {
+        await walk(childRel);
+      } else {
+        files.push(childRel);
+      }
+    }
+  };
+
+  await walk("");
+  return files;
+}
+
+async function fallbackSearchText(
+  query: string,
+  cwd: string,
+  glob?: string,
+): Promise<string> {
+  const files = await collectFilesForTextSearch(cwd, glob);
+  const matches: Array<{ file: string; line: number; text: string }> = [];
+  const needle = query.toLowerCase();
+  const absCwd = resolve(process.cwd(), cwd);
+
+  for (const file of files) {
+    if (matches.length >= 200) break;
+
+    const absFile = resolve(absCwd, file);
+    let raw = "";
+    try {
+      raw = await readFile(absFile, "utf-8");
+    } catch {
+      continue;
+    }
+
+    if (raw.includes("\u0000")) continue;
+
+    const lines = raw.split("\n");
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i] ?? "";
+      if (line.toLowerCase().includes(needle)) {
+        matches.push({
+          file,
+          line: i + 1,
+          text: line,
+        });
+        if (matches.length >= 200) break;
+      }
+    }
+  }
+
+  return JSON.stringify({
+    query,
+    cwd,
+    glob: glob ?? null,
+    count: matches.length,
+    matches,
+    engine: "fallback",
+  });
+}
+
 // Search file contents using ripgrep so agents can find symbols and behavior quickly.
 async function handleSearchText(p: Record<string, unknown>): Promise<string> {
   const query = p["query"] as string;
@@ -169,14 +248,26 @@ async function handleSearchText(p: Record<string, unknown>): Promise<string> {
 
   cmd.push(query, absCwd);
 
-  const proc = Bun.spawnSync({
-    cmd,
-    stdout: "pipe",
-    stderr: "pipe",
-  });
+  let proc: ReturnType<typeof Bun.spawnSync>;
+  try {
+    proc = Bun.spawnSync({
+      cmd,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (/Executable not found in \$PATH:\s*"rg"/.test(message)) {
+      return fallbackSearchText(query, cwd, glob);
+    }
+    throw error;
+  }
 
   if (proc.exitCode !== 0 && proc.exitCode !== 1) {
     const stderr = new TextDecoder().decode(proc.stderr).trim();
+    if (/Executable not found in \$PATH:\s*"rg"/.test(stderr)) {
+      return fallbackSearchText(query, cwd, glob);
+    }
     throw new Error(stderr || "search_text failed");
   }
 
@@ -201,6 +292,7 @@ async function handleSearchText(p: Record<string, unknown>): Promise<string> {
     glob: glob ?? null,
     count: matches.length,
     matches,
+    engine: "rg",
   });
 }
 
@@ -323,14 +415,34 @@ async function handleSuggestFollowups(
 }
 
 async function handleAskUser(p: Record<string, unknown>): Promise<string> {
-  const question = p["question"] as string | undefined;
-  if (!question?.trim()) throw new Error("ask_user: 'question' is required");
+  const rawQuestions = p["questions"];
+  const singleQuestion = p["question"] as string | undefined;
+  let questions: Array<Record<string, unknown>> = [];
+
+  if (typeof rawQuestions === "string") {
+    try {
+      questions = JSON.parse(rawQuestions) as Array<Record<string, unknown>>;
+    } catch {
+      throw new Error("ask_user: 'questions' must be valid JSON");
+    }
+  } else if (Array.isArray(rawQuestions)) {
+    questions = rawQuestions as Array<Record<string, unknown>>;
+  }
+
+  if (!questions.length && singleQuestion?.trim()) {
+    questions = [{ question: singleQuestion.trim() }];
+  }
+
+  if (!questions.length) {
+    throw new Error("ask_user: 'questions' is required");
+  }
+
   return JSON.stringify({
     paused: true,
     supported: false,
-    question,
+    questions,
     message:
-      "ask_user is not yet interactive in this CLI session, so the question was recorded but not sent to the user as a form.",
+      "ask_user is not yet fully interactive in this CLI session, so the request was recorded but not shown as a dedicated questionnaire.",
   });
 }
 

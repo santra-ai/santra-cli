@@ -6,4 +6,8 @@ export {
   type AgentValidationError,
 } from "./agent-registry.ts";
 export { runProgrammaticAgent } from "./programmatic-runner.ts";
-export type { AgentRunOptions, FileChangeFeedback } from "./base-agent.ts";
+export type {
+  AgentRunOptions,
+  FileChangeFeedback,
+  UserQuestion,
+} from "./base-agent.ts";

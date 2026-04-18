@@ -1,5 +1,5 @@
 import { BaseAgent, Swarm } from "@santra/agent-runtime";
-import type { RunState } from "@santra/shared";
+import type { AgentPhase, RunState, ToolCallResult } from "@santra/shared";
 import type { RunnerOptions, RunOptions } from "./types.ts";
 import { classifyPrompt } from "./classifier.ts";
 
@@ -26,6 +26,73 @@ You are Santra in casual conversation mode.
 
 function stripSystemMessages(previousMessages?: RunOptions["previousMessages"]) {
   return (previousMessages ?? []).filter((message) => message.role !== "system");
+}
+
+function ensurePromptInHistory(
+  messages: NonNullable<RunOptions["previousMessages"]>,
+  prompt: string,
+) {
+  const trimmedPrompt = prompt.trim();
+  if (!trimmedPrompt) return [...messages];
+
+  const hasPrompt = messages.some(
+    (message) =>
+      message.role === "user" && message.content.trim() === trimmedPrompt,
+  );
+
+  return hasPrompt
+    ? [...messages]
+    : [...messages, { role: "user" as const, content: prompt }];
+}
+
+function summarizeToolResult(result: ToolCallResult): string {
+  if (result.error) {
+    return `${result.name} failed: ${result.error}`;
+  }
+
+  try {
+    const parsed = JSON.parse(result.output) as Record<string, unknown>;
+    if (typeof parsed["path"] === "string") {
+      return `${result.name} on ${parsed["path"]}`;
+    }
+    if (typeof parsed["message"] === "string") {
+      return `${result.name}: ${parsed["message"]}`;
+    }
+  } catch {
+    // ignore JSON parse failure
+  }
+
+  return `${result.name} completed`;
+}
+
+function buildContinuationMessage(
+  prompt: string,
+  phases: AgentPhase[],
+  toolCallResults: ToolCallResult[],
+  error: string,
+): string {
+  const recentStatuses = phases
+    .filter((phase): phase is Extract<AgentPhase, { type: "status" }> => phase.type === "status")
+    .map((phase) => phase.message.trim())
+    .filter(Boolean)
+    .slice(-3);
+
+  const recentTools = toolCallResults
+    .slice(-6)
+    .map((result) => `- ${summarizeToolResult(result)}`);
+
+  const lines = [
+    `Continuation context for: ${prompt}`,
+    recentStatuses.length > 0
+      ? `Recent progress: ${recentStatuses.join(" -> ")}`
+      : "Recent progress: none captured",
+    recentTools.length > 0 ? "Recent tool results:" : "Recent tool results: none captured",
+    ...recentTools,
+    `Last error: ${error}`,
+    "Resume from this exact point. Do not restart from the repository root unless necessary.",
+  ];
+
+  return lines.join("\n");
 }
 
 // Runner decides whether to use single-agent mode or swarm mode for a request.
@@ -65,13 +132,24 @@ export class Runner {
         onPhase: options.onPhase,
         abortSignal: options.abortSignal,
         onFileChangeReview: options.onFileChangeReview,
+        onUserQuestion: options.onUserQuestion,
       });
 
       if (state.error) {
+        const continuation = buildContinuationMessage(
+          options.prompt,
+          state.phases,
+          state.toolCallResults,
+          state.error,
+        );
+        const messagesWithPrompt = ensurePromptInHistory(
+          state.messages,
+          options.prompt,
+        );
         return {
           messages: [
-            ...(options.previousMessages ?? []),
-            { role: "user", content: options.prompt },
+            ...messagesWithPrompt,
+            { role: "assistant", content: continuation },
           ],
           output: { type: "error", message: state.error },
           toolCalls: state.toolCallResults,
@@ -80,11 +158,7 @@ export class Runner {
       }
 
       return {
-        messages: [
-          ...(options.previousMessages ?? []),
-          { role: "user", content: options.prompt },
-          { role: "assistant", content: state.finalOutput },
-        ],
+        messages: state.messages,
         output: { type: "text", content: state.finalOutput },
         toolCalls: state.toolCallResults,
         thinking: state.thinkingSteps,
@@ -112,6 +186,7 @@ export class Runner {
       onPhase: options.onPhase,
       abortSignal: options.abortSignal,
       onFileChangeReview: options.onFileChangeReview,
+      onUserQuestion: options.onUserQuestion,
     });
   }
 }

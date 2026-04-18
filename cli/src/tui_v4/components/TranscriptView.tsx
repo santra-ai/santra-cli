@@ -32,23 +32,25 @@ function renderSegments(segments: TranscriptSegment[]) {
 function TranscriptLine({ row, width }: { row: TranscriptRow; width: number }) {
   return (
     <Box width={width}>
-      {renderSegments(row.before)}
-      {row.indicator ? (
-        row.indicator.kind === "spinner" ? (
-          <Text color={row.indicator.color}>
-            <Spinner type="dots" />
-          </Text>
-        ) : (
-          <Text
-            color={row.indicator.color}
-            bold={row.indicator.bold}
-            dimColor={row.indicator.dim}
-          >
-            {row.indicator.text}
-          </Text>
-        )
-      ) : null}
-      {renderSegments(row.after)}
+      <Text wrap="wrap">
+        {renderSegments(row.before)}
+        {row.indicator ? (
+          row.indicator.kind === "spinner" ? (
+            <Text color={row.indicator.color}>
+              <Spinner type="dots" />
+            </Text>
+          ) : (
+            <Text
+              color={row.indicator.color}
+              bold={row.indicator.bold}
+              dimColor={row.indicator.dim}
+            >
+              {row.indicator.text}
+            </Text>
+          )
+        ) : null}
+        {renderSegments(row.after)}
+      </Text>
     </Box>
   );
 }

@@ -1,5 +1,5 @@
 import type { Message, RunState, AgentPhase, SwarmState } from "@santra/shared";
-import type { FileChangeFeedback } from "@santra/agent-runtime";
+import type { FileChangeFeedback, UserQuestion } from "@santra/agent-runtime";
 
 export type RunnerOptions = {
   endpoint: string;
@@ -19,6 +19,7 @@ export type RunOptions = {
     oldStr: string,
     newStr: string,
   ) => Promise<FileChangeFeedback>;
+  onUserQuestion?: (questions: UserQuestion[]) => Promise<string>;
 };
 
 export type { RunState, SwarmState };

@@ -445,8 +445,13 @@ function describeToolError(
     return "Couldn't read the subtree — no path provided.";
   if (error === "run_terminal_command: 'command' is required")
     return "Couldn't run the command — no command was provided.";
-  if (error === "ask_user: 'question' is required")
-    return "Couldn't prepare a question — no question was provided.";
+  if (
+    error === "ask_user: 'question' is required" ||
+    error === "ask_user: 'questions' is required"
+  )
+    return "Couldn't prepare questions — no question was provided.";
+  if (error === "ask_user: 'questions' must be valid JSON")
+    return "Couldn't prepare questions — the question payload was invalid.";
   if (error === "web_search: 'query' is required")
     return "Couldn't search the web — no query was provided.";
   if (error === "read_docs: 'source' is required")
@@ -674,7 +679,7 @@ export class LogDeriver {
   private streamSlotIdx: number | null = null;
   private streamAgentId: string | null = null;
   private streamRawBuffer = "";
-  private pendingDiffs: Array<{ filePath: string; diff: DiffEntry }> = [];
+  private pendingDiffs = new Map<string, { filePath: string; diff: DiffEntry }>();
   private lastStatusSlotIdx: number | null = null;
   private lastStatusMessage = "";
   private nextSlotIdx: number | null = null; // single global replaceable slot
@@ -1195,6 +1200,17 @@ export class LogDeriver {
           }));
         }
 
+        const pendingDiff = this.pendingDiffs.get(event.toolCallId);
+        if (pendingDiff && !event.error) {
+          this.push({
+            id: `${event.eventId}-diff-${pendingDiff.filePath}`,
+            time,
+            level: "diff",
+            message: pendingDiff.filePath,
+            diff: pendingDiff.diff,
+          });
+        }
+        this.pendingDiffs.delete(event.toolCallId);
         this.pendingTools.delete(event.toolCallId);
         break;
       }
@@ -1223,7 +1239,10 @@ export class LogDeriver {
       }
 
       case "diff_collected":
-        this.pendingDiffs.push({ filePath: event.filePath, diff: event.diff });
+        this.pendingDiffs.set(event.toolCallId, {
+          filePath: event.filePath,
+          diff: event.diff,
+        });
         break;
 
       case "run_completed": {
@@ -1250,7 +1269,7 @@ export class LogDeriver {
 
         this.finalizeAll();
 
-        for (const { filePath, diff } of this.pendingDiffs) {
+        for (const { filePath, diff } of this.pendingDiffs.values()) {
           this.push({
             id: `${event.eventId}-diff-${filePath}`,
             time,
@@ -1259,7 +1278,7 @@ export class LogDeriver {
             diff,
           });
         }
-        this.pendingDiffs.length = 0;
+        this.pendingDiffs.clear();
         break;
       }
 
@@ -1298,7 +1317,7 @@ export class LogDeriver {
     this.streamSlotIdx = null;
     this.streamAgentId = null;
     this.streamRawBuffer = "";
-    this.pendingDiffs = [];
+    this.pendingDiffs.clear();
     this.lastStatusSlotIdx = null;
     this.lastStatusMessage = "";
     this.nextSlotIdx = null;

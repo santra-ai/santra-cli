@@ -130,6 +130,7 @@ export type RunEvent =
       seq: number;
       runId: string;
       timestamp: number;
+      toolCallId: string;
       filePath: string;
       diff: DiffEntry;
     }

@@ -41,4 +41,30 @@ describe("StreamParser markup recovery", () => {
       },
     ]);
   });
+
+  test("recovers malformed tool call before tool_result markup", () => {
+    const chunks = parseFullText(
+      '<tool_call name="run_terminal_command">{"command":"grep --version","cwd":".","timeout_ms":30000}</\n\nuser\n<tool_result name="run_terminal_command" id="tc_3">{"stdout":"ok"}</tool_result>',
+    );
+
+    expect(chunks).toEqual([
+      {
+        type: "tool_call",
+        call: {
+          id: "tc_1",
+          name: "run_terminal_command",
+          parameters: {
+            command: "grep --version",
+            cwd: ".",
+            timeout_ms: 30000,
+          },
+        },
+      },
+      {
+        type: "text",
+        content:
+          '<tool_result name="run_terminal_command" id="tc_3">{"stdout":"ok"}</tool_result>',
+      },
+    ]);
+  });
 });
