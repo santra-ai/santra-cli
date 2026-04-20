@@ -3,22 +3,28 @@
 Santra is a CLI-based coding assistant designed to help developers with their coding tasks. It provides a range of features to streamline the development process and improve productivity.
 
 ## Features
+
 - **Code Generation**: Automatically generate code snippets and templates.
 - **Code Review**: Perform code reviews and suggest improvements.
 - **Documentation**: Generate and update documentation based on code.
 - **Task Management**: Manage and track coding tasks and to-dos.
 
 ## Getting Started
+
 To get started with Santra, follow these steps:
+
 1. Install Santra using npm: `npm install -g santra`
-2. Run Santra in your project directory: `santra`
+2. Add the `santra` command to your shell PATH: `santra install-shell`
+3. Restart your shell, then run Santra in your project directory: `santra`
 
 ## Usage
+
 For detailed usage instructions and available commands, refer to the [docs](docs/README.md).
 
 ## Subdirectories
 
 ### core/
+
 - **Purpose**: Contains the core logic and utilities for Santra.
 - **Key Files**:
   - `index.ts`: Exports the main `Runner` class and related types.
@@ -26,12 +32,14 @@ For detailed usage instructions and available commands, refer to the [docs](docs
   - `src/classifier.ts`: Handles prompt classification.
 
 ### web/
+
 - **Purpose**: Contains the web application built with Next.js.
 - **Key Files**:
   - `README.md`: Provides instructions for running and deploying the web application.
   - `app/page.tsx`: Main page component.
 
 ### agents/
+
 - **Purpose**: Contains specialized agents that perform specific tasks within Santra.
 - **Key Files**:
   - `README.md`: Describes available agents and guidelines for developing new agents.
@@ -42,12 +50,14 @@ For detailed usage instructions and available commands, refer to the [docs](docs
   - `thinker.ts`: Agent for reasoning through tricky decisions.
 
 ### cli/
+
 - **Purpose**: Contains the CLI application workspace package.
 - **Key Files**:
   - `README.md`: Provides instructions for running the CLI in development mode.
   - `index.ts`: Main entry point for the CLI.
 
 ### docs/
+
 - **Purpose**: Contains documentation for using and contributing to Santra.
 - **Key Files**:
   - `README.md`: Provides an overview of the documentation structure.
@@ -55,6 +65,7 @@ For detailed usage instructions and available commands, refer to the [docs](docs
   - `developer_guide.md`: Detailed developer guide.
 
 ### codebuff-main/
+
 - **Purpose**: Contains the main Codebuff and Freebuff modules.
 - **Key Files**:
   - `README.md`: Provides an overview of Codebuff and Freebuff.
@@ -79,17 +90,21 @@ For detailed usage instructions and available commands, refer to the [docs](docs
   - `evals/buffbench/README.md`: Describes the buffbench evaluation tool.
 
 ### packages/
+
 - **Purpose**: Contains shared packages used across the project.
 - **Key Files**:
   - `shared/README.md`: Provides an overview of the shared package.
 
 ## Contributing
+
 Contributions to Santra are welcome! Please see the [contributing guidelines](CONTRIBUTING.md) for more information.
 
 ## License
+
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
 ## Recent Updates
+
 - **Improved Code Generation**: Enhanced the code generation feature to support more complex templates and snippets.
 - **Enhanced Code Review**: Added new features to the code review agent for better suggestions and feedback.
 - **Updated Documentation**: Updated the documentation to include new features and usage instructions.

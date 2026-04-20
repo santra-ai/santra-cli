@@ -1,6 +1,6 @@
-import { homedir } from "os";
 import { join } from "path";
 import { randomUUID } from "crypto";
+import { getSantraHome } from "./santra-home";
 
 export type Provider =
   | "anthropic"
@@ -76,7 +76,7 @@ export const PROVIDER_MODELS: Record<Provider, string[]> = {
 // Providers that need a base URL (ollama, self-hosted NIM)
 export const NEEDS_BASE_URL: Provider[] = ["ollama", "nvidia-nim"];
 
-const CONFIG_DIR  = join(homedir(), ".santra");
+const CONFIG_DIR  = getSantraHome();
 const CONFIG_PATH = join(CONFIG_DIR, "config.json");
 const TRIAL_PATH = join(CONFIG_DIR, "trial.json");
 const DEFAULT_TRIAL_TOKENS = 10_000;

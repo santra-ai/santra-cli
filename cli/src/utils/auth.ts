@@ -1,5 +1,5 @@
-import { homedir } from "os";
 import { join } from "path";
+import { getSantraHome } from "./santra-home";
 
 export type AuthProvider = "github" | "google";
 
@@ -9,7 +9,7 @@ export type AuthState = {
   authenticatedAt: number;
 };
 
-const AUTH_DIR = join(homedir(), ".santra");
+const AUTH_DIR = getSantraHome();
 const AUTH_PATH = join(AUTH_DIR, "auth.json");
 
 export function authExists(): boolean {
