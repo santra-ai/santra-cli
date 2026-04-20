@@ -1,9 +1,7 @@
 import path from "node:path";
 import { Box, useApp, useInput, useStdout } from "ink";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import {
-  buildLoginUrl,
-} from "@santra/shared";
+import { buildLoginUrl } from "@santra/shared";
 import { Composer } from "./components/Composer";
 import { TranscriptView } from "./components/TranscriptView";
 import { ChromeBar } from "./components/ChromeBar";
@@ -26,6 +24,8 @@ import {
 
 const PLACEHOLDER = "Ask the agent anything… (/ for commands)";
 const MOUSE_SCROLL_LINES = 3;
+const LOGIN_POLL_INTERVAL_MS = 5000;
+const LOGIN_POLL_MAX_MS = 10 * 60 * 1000;
 type InteractionMode = "scroll" | "select";
 type LoginState = {
   token: string;
@@ -129,7 +129,9 @@ export function App() {
       if (reuseExisting && loginState) {
         const reopened = openLoginUrl(loginState.url);
         setLoginState((current) =>
-          current ? { ...current, opened: current.opened || reopened } : current,
+          current
+            ? { ...current, opened: current.opened || reopened }
+            : current,
         );
         return;
       }
@@ -151,7 +153,8 @@ export function App() {
             id: `login-err-${Date.now()}`,
             time: new Date().toTimeString().slice(0, 8),
             level: "error" as const,
-            message: "Could not connect to authentication server. Check your connection.",
+            message:
+              "Could not connect to authentication server. Check your connection.",
           },
         ]);
         return;
@@ -168,7 +171,6 @@ export function App() {
     [loginState, openLoginUrl, getBaseAuthApiUrl],
   );
 
-
   useEffect(() => {
     if (!loginState) {
       if (loginPollRef.current !== undefined) {
@@ -178,7 +180,27 @@ export function App() {
       return;
     }
 
+    const startedAt = Date.now();
+
     loginPollRef.current = setInterval(async () => {
+      if (Date.now() - startedAt > LOGIN_POLL_MAX_MS) {
+        if (loginPollRef.current !== undefined) {
+          clearInterval(loginPollRef.current);
+          loginPollRef.current = undefined;
+        }
+        setLoginState(null);
+        setCumulativeLog((prev) => [
+          ...prev,
+          {
+            id: `login-timeout-${Date.now()}`,
+            time: new Date().toTimeString().slice(0, 8),
+            level: "info" as const,
+            message: "Login timed out. Run /login to try again.",
+          },
+        ]);
+        return;
+      }
+
       try {
         const apiUrl = getBaseAuthApiUrl();
         const response = await fetch(`${apiUrl}/${loginState.token}`);
@@ -209,7 +231,7 @@ export function App() {
       } catch (err) {
         // Silently retry polling
       }
-    }, 2000);
+    }, LOGIN_POLL_INTERVAL_MS);
 
     return () => {
       if (loginPollRef.current !== undefined) {
@@ -308,7 +330,6 @@ export function App() {
     };
   }, [busy, log.length, showSetup, loginState]);
 
-
   // ─── Input state ──────────────────────────────────────────────────────────
   const [inputValue, setInputValue] = useState("");
   const [selectedSuggestion, setSelectedSuggestion] = useState(0);
@@ -365,7 +386,8 @@ export function App() {
               id: `setup-login-${Date.now()}`,
               time: new Date().toTimeString().slice(0, 8),
               level: "info" as const,
-              message: "Sign in first. After login completes, run /setup again.",
+              message:
+                "Sign in first. After login completes, run /setup again.",
             },
           ]);
           return;
@@ -550,7 +572,13 @@ export function App() {
       process.stdout.write("\x1b[?1000l\x1b[?1006l");
       process.stdin.off("data", onData);
     };
-  }, [handleMouseScroll, interactionMode, loginState, showSetup, toggleInteractionMode]);
+  }, [
+    handleMouseScroll,
+    interactionMode,
+    loginState,
+    showSetup,
+    toggleInteractionMode,
+  ]);
 
   // ─── Suggestion execution ─────────────────────────────────────────────────
   const executeSuggestion = useCallback(() => {
@@ -817,7 +845,8 @@ export function App() {
   });
 
   // ─── Render ───────────────────────────────────────────────────────────────
-  const isWelcomeState = displayLog.length === 1 && displayLog[0]?.id === 'welcome' && !busy;
+  const isWelcomeState =
+    displayLog.length === 1 && displayLog[0]?.id === "welcome" && !busy;
 
   if (showSetup) {
     return (
