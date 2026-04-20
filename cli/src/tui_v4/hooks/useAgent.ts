@@ -1312,7 +1312,7 @@ export default function useAgent(): UseAgentReturn {
               id: makeId(),
               time: timeStamp(),
               level: "info",
-              message: `Open ${LOGIN_URL} to sign in with Google or GitHub and manage API keys.`,
+              message: `Open ${LOGIN_URL} to sign in with Google or GitHub. After login, run /setup in the terminal.`,
             },
           ]);
           break;

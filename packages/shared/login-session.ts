@@ -3,25 +3,13 @@ import { join } from "path";
 import { randomUUID } from "crypto";
 import * as fs from "fs";
 
-export type LoginProvider =
-  | "anthropic"
-  | "openai"
-  | "nvidia-nim"
-  | "groq"
-  | "together"
-  | "ollama";
-
-export type LoginSessionConfig = {
-  provider: LoginProvider;
-  model: string;
-  apiKey: string;
-};
+export type AuthProvider = "github" | "google";
 
 export type LoginSessionRecord = {
   token: string;
   createdAt: number;
   status: "pending" | "completed";
-  config?: LoginSessionConfig;
+  provider?: AuthProvider;
 };
 
 const SESSION_DIR = join(homedir(), ".santra", "login-sessions");
@@ -56,14 +44,14 @@ export function readLoginSession(token: string): LoginSessionRecord | null {
 
 export function completeLoginSession(
   token: string,
-  config: LoginSessionConfig,
+  provider: AuthProvider,
 ): LoginSessionRecord | null {
   const current = readLoginSession(token);
   if (!current) return null;
   const next: LoginSessionRecord = {
     ...current,
     status: "completed",
-    config,
+    provider,
   };
   fs.writeFileSync(getSessionPath(token), JSON.stringify(next, null, 2), "utf-8");
   return next;
@@ -73,7 +61,7 @@ export function consumeCompletedLoginSession(
   token: string,
 ): LoginSessionRecord | null {
   const current = readLoginSession(token);
-  if (!current || current.status !== "completed" || !current.config) return null;
+  if (!current || current.status !== "completed" || !current.provider) return null;
   try {
     fs.unlinkSync(getSessionPath(token));
   } catch {

@@ -30,7 +30,7 @@ export function LoginGate({ width, height, url, opened }: Props) {
           Waiting for sign-in to complete…
         </Text>
         <Text color="#a3a3a3">
-          Press o to reopen the link or s to use /setup instead.
+          Press o to reopen the link. Run /setup after login completes.
         </Text>
       </Box>
     </Box>

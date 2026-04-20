@@ -111,7 +111,7 @@ export class Client {
       const outputTokens =
         state.output.type === "text" ? estimateTokens(state.output.content) : 0;
       const historyTokens = Math.min(
-        800,
+        300,
         estimateTokens(previousMessages.map((message) => message.content).join("\n")),
       );
       consumeTrialTokens(promptTokens + outputTokens + historyTokens);

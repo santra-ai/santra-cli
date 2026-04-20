@@ -28,6 +28,8 @@ export type TrialState = {
   remainingTokens: number;
 };
 
+export const SANTRA_HOSTED_MODEL = "meta/llama-3.1-8b-instruct";
+
 export const PROVIDER_LABELS: Record<Provider, string> = {
   anthropic:   "Anthropic (Claude)",
   openai:      "OpenAI (GPT-4o)",
@@ -78,6 +80,7 @@ const CONFIG_DIR  = join(homedir(), ".santra");
 const CONFIG_PATH = join(CONFIG_DIR, "config.json");
 const TRIAL_PATH = join(CONFIG_DIR, "trial.json");
 const DEFAULT_TRIAL_TOKENS = 10_000;
+const APPROX_CHARS_PER_TOKEN = 6;
 
 function ensureConfigDir(): typeof import("fs") {
   const fs = require("fs") as typeof import("fs");
@@ -102,8 +105,7 @@ export function getDefaultHostedConfig(): SantraConfig {
     version: 2,
     authMode: "santra",
     provider: hostedProvider(),
-    model:
-      process.env["NVIDIA_MODEL"] ?? "meta/llama-3.1-8b-instruct",
+    model: SANTRA_HOSTED_MODEL,
     apiKey: "",
   };
 }
@@ -168,11 +170,6 @@ export function getAuthHeaders(config: SantraConfig): Record<string, string> {
           "x-santra-key": config.apiKey,
           "x-santra-model": config.model,
         };
-
-  if (config.authMode === "santra" && config.model) {
-    headers["x-santra-model"] = config.model;
-  }
-
   if (config.baseUrl) {
     headers["x-santra-base-url"] = config.baseUrl;
   }
@@ -240,5 +237,5 @@ export function usingHostedAccess(config: SantraConfig | null): boolean {
 export function estimateTokens(text: string): number {
   const normalized = text.trim();
   if (!normalized) return 0;
-  return Math.max(1, Math.ceil(normalized.length / 4));
+  return Math.max(1, Math.ceil(normalized.length / APPROX_CHARS_PER_TOKEN));
 }

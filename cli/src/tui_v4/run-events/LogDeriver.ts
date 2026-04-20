@@ -104,7 +104,7 @@ function describeSectionStart(agentId: string, task: string): string {
     case "orchestrator":
       return broadRepoRead
         ? "Understanding the codebase"
-        : "Planning the next step";
+        : "Understanding the request";
     case "file-picker":
       return broadRepoRead
         ? "Mapping the repository structure"

@@ -1,5 +1,6 @@
 import { Box, Text } from "ink";
 import { useEffect, useState } from "react";
+import type { AuthProvider, LoginSessionRecord } from "@santra/shared";
 
 const MUTED = "#b3b3b3";
 const SUBTLE = "#8f8f8f";
@@ -106,9 +107,18 @@ function MiniLogo({ frame }: { frame: number }) {
 interface WelcomeStateProps {
   width: number;
   height: number;
+  providerLabel: string;
+  recommendation?: string;
+  remainingTokensLabel?: string;
 }
 
-export function WelcomeState({ width, height }: WelcomeStateProps) {
+export function WelcomeState({
+  width,
+  height,
+  providerLabel,
+  recommendation,
+  remainingTokensLabel,
+}: WelcomeStateProps) {
   const [frame, setFrame] = useState(0);
   const [tipIndex, setTipIndex] = useState(0);
 
@@ -120,7 +130,7 @@ export function WelcomeState({ width, height }: WelcomeStateProps) {
   useEffect(() => {
     const id = setInterval(
       () => setTipIndex((current) => (current + 1) % TIPS.length),
-      2000,
+      4000,
     );
     return () => clearInterval(id);
   }, []);
@@ -143,6 +153,21 @@ export function WelcomeState({ width, height }: WelcomeStateProps) {
           <Text color={MUTED}>
             Santra is a repository-aware coding assistant for the terminal.
           </Text>
+        </Box>
+        <Box marginBottom={1} flexDirection="column">
+          <Text color="white">
+            Provider: <Text color={TIP_ACCENT}>{providerLabel}</Text>
+          </Text>
+          {recommendation ? (
+            <Text color={MUTED}>
+              Recommendation: <Text color={TIP_ACCENT}>{recommendation}</Text>
+            </Text>
+          ) : null}
+          {remainingTokensLabel ? (
+            <Text color={MUTED}>
+              Remaining tokens: <Text color={TIP_ACCENT}>{remainingTokensLabel}</Text>
+            </Text>
+          ) : null}
         </Box>
 
         <Box>
@@ -187,7 +212,7 @@ export function WelcomeState({ width, height }: WelcomeStateProps) {
         <Text color={SUBTLE}>│</Text>
         
         <Box flexGrow={1} flexDirection="column">
-          <Text color={MUTED}>ready for input…</Text>
+          <Text color={MUTED}>{providerLabel}</Text>
         </Box>
       </Box>
     </Box>

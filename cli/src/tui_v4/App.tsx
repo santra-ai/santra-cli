@@ -3,8 +3,6 @@ import { Box, useApp, useInput, useStdout } from "ink";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   buildLoginUrl,
-  consumeCompletedLoginSession,
-  createLoginSession,
 } from "@santra/shared";
 import { Composer } from "./components/Composer";
 import { TranscriptView } from "./components/TranscriptView";
@@ -17,7 +15,14 @@ import useAgent from "./hooks/useAgent";
 import { getSlashSuggestions, sanitizeComposerInput } from "./input";
 import type { LogEntry } from "./types.ts";
 import type { TranscriptRow } from "./transcript.ts";
-import { configExists, writeConfig } from "../utils/config.ts";
+import { authExists, writeAuthState } from "../utils/auth.ts";
+import {
+  getDefaultHostedConfig,
+  PROVIDER_LABELS,
+  readConfig,
+  readTrialState,
+  usingHostedAccess,
+} from "../utils/config.ts";
 
 const PLACEHOLDER = "Ask the agent anything… (/ for commands)";
 const MOUSE_SCROLL_LINES = 3;
@@ -77,7 +82,6 @@ export function App() {
   const loginPollRef = useRef<ReturnType<typeof setInterval> | undefined>(
     undefined,
   );
-  const startupLoginRef = useRef(false);
 
   // ─── Terminal dimensions ──────────────────────────────────────────────────
   const [termWidth, setTermWidth] = useState(stdout?.columns ?? 120);
@@ -115,8 +119,13 @@ export function App() {
     return false;
   }, []);
 
+  const getBaseAuthApiUrl = useCallback(() => {
+    const loginUrl = buildLoginUrl("dummy");
+    return loginUrl.replace(/\/login\/dummy$/, "/api/v1/login-sessions");
+  }, []);
+
   const beginLoginFlow = useCallback(
-    (reuseExisting = false) => {
+    async (reuseExisting = false) => {
       if (reuseExisting && loginState) {
         const reopened = openLoginUrl(loginState.url);
         setLoginState((current) =>
@@ -125,24 +134,40 @@ export function App() {
         return;
       }
 
-      const session = createLoginSession();
-      const url = buildLoginUrl(session.token);
+      const token = crypto.randomUUID();
+      const apiUrl = getBaseAuthApiUrl();
+
+      // Register the session on the central server
+      try {
+        await fetch(apiUrl, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ token }),
+        });
+      } catch (err) {
+        setCumulativeLog((prev) => [
+          ...prev,
+          {
+            id: `login-err-${Date.now()}`,
+            time: new Date().toTimeString().slice(0, 8),
+            level: "error" as const,
+            message: "Could not connect to authentication server. Check your connection.",
+          },
+        ]);
+        return;
+      }
+
+      const url = buildLoginUrl(token);
       const opened = openLoginUrl(url);
       setLoginState({
-        token: session.token,
+        token,
         url,
         opened,
       });
     },
-    [loginState, openLoginUrl],
+    [loginState, openLoginUrl, getBaseAuthApiUrl],
   );
 
-  useEffect(() => {
-    if (!startupLoginRef.current && !configExists()) {
-      startupLoginRef.current = true;
-      beginLoginFlow();
-    }
-  }, [beginLoginFlow]);
 
   useEffect(() => {
     if (!loginState) {
@@ -153,29 +178,38 @@ export function App() {
       return;
     }
 
-    loginPollRef.current = setInterval(() => {
-      const completed = consumeCompletedLoginSession(loginState.token);
-      if (!completed?.config) return;
+    loginPollRef.current = setInterval(async () => {
+      try {
+        const apiUrl = getBaseAuthApiUrl();
+        const response = await fetch(`${apiUrl}/${loginState.token}`);
+        if (!response.ok) return;
 
-      writeConfig({
-        version: 2,
-        authMode: "byok",
-        provider: completed.config.provider,
-        model: completed.config.model,
-        apiKey: completed.config.apiKey,
-      });
+        const session = (await response.json()) as {
+          status: string;
+          provider?: string;
+        };
+        if (session.status !== "completed" || !session.provider) return;
 
-      setLoginState(null);
-      setCumulativeLog((prev) => [
-        ...prev,
-        {
-          id: `login-complete-${Date.now()}`,
-          time: new Date().toTimeString().slice(0, 8),
-          level: "ok" as const,
-          message: "Connected Santra CLI.",
-        },
-      ]);
-    }, 1000);
+        writeAuthState({
+          version: 1,
+          provider: session.provider as any,
+          authenticatedAt: Date.now(),
+        });
+
+        setLoginState(null);
+        setCumulativeLog((prev) => [
+          ...prev,
+          {
+            id: `login-complete-${Date.now()}`,
+            time: new Date().toTimeString().slice(0, 8),
+            level: "ok" as const,
+            message: "Connected Santra CLI.",
+          },
+        ]);
+      } catch (err) {
+        // Silently retry polling
+      }
+    }, 2000);
 
     return () => {
       if (loginPollRef.current !== undefined) {
@@ -256,6 +290,24 @@ export function App() {
     [cumulativeLog, log],
   );
 
+  const welcomeAccessState = useMemo(() => {
+    const config = readConfig() ?? getDefaultHostedConfig();
+    const hosted = usingHostedAccess(config);
+    const providerName = PROVIDER_LABELS[config.provider] ?? config.provider;
+
+    return {
+      providerLabel: hosted
+        ? `${providerName} · Santra hosted`
+        : `${providerName} · BYOK`,
+      recommendation: hosted
+        ? "Run /setup and choose BYOK for your own provider key."
+        : "You're using your own provider key.",
+      remainingTokensLabel: hosted
+        ? readTrialState().remainingTokens.toLocaleString()
+        : undefined,
+    };
+  }, [busy, log.length, showSetup, loginState]);
+
 
   // ─── Input state ──────────────────────────────────────────────────────────
   const [inputValue, setInputValue] = useState("");
@@ -305,6 +357,19 @@ export function App() {
   const handleCommandV4 = useCallback(
     (cmd: string, arg?: string) => {
       if (cmd === "setup") {
+        if (!authExists()) {
+          beginLoginFlow();
+          setCumulativeLog((prev) => [
+            ...prev,
+            {
+              id: `setup-login-${Date.now()}`,
+              time: new Date().toTimeString().slice(0, 8),
+              level: "info" as const,
+              message: "Sign in first. After login completes, run /setup again.",
+            },
+          ]);
+          return;
+        }
         setLoginState(null);
         setShowSetup(true);
         return;
@@ -525,12 +590,6 @@ export function App() {
     if (loginState) {
       if (!key.ctrl && !key.meta && (input === "o" || input === "O")) {
         beginLoginFlow(true);
-        return;
-      }
-
-      if (!key.ctrl && !key.meta && (input === "s" || input === "S")) {
-        setLoginState(null);
-        setShowSetup(true);
         return;
       }
 
@@ -798,7 +857,13 @@ export function App() {
         interactionMode={interactionMode}
       />
       {isWelcomeState ? (
-        <WelcomeState width={termWidth} height={scrollViewportHeight} />
+        <WelcomeState
+          width={termWidth}
+          height={scrollViewportHeight}
+          providerLabel={welcomeAccessState.providerLabel}
+          recommendation={welcomeAccessState.recommendation}
+          remainingTokensLabel={welcomeAccessState.remainingTokensLabel}
+        />
       ) : (
         <TranscriptView
           rows={transcriptRows}

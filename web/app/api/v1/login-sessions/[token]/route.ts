@@ -1,23 +1,13 @@
 import type { NextRequest } from "next/server";
-import {
-  completeLoginSession,
-  readLoginSession,
-  type LoginProvider,
-} from "@santra/shared";
+import { getSession, updateSession } from "@/app/lib/sessions";
+import { AuthProvider } from "@santra/shared";
 
 export const runtime = "nodejs";
 
-const PROVIDERS: readonly LoginProvider[] = [
-  "anthropic",
-  "openai",
-  "nvidia-nim",
-  "groq",
-  "together",
-  "ollama",
-];
+const PROVIDERS: readonly AuthProvider[] = ["github", "google"];
 
-function isProvider(value: string): value is LoginProvider {
-  return PROVIDERS.includes(value as LoginProvider);
+function isProvider(value: string): value is AuthProvider {
+  return PROVIDERS.includes(value as AuthProvider);
 }
 
 export async function GET(
@@ -25,7 +15,7 @@ export async function GET(
   context: { params: Promise<{ token: string }> },
 ): Promise<Response> {
   const { token } = await context.params;
-  const session = readLoginSession(token);
+  const session = getSession(token);
 
   if (!session) {
     return Response.json({ error: "Login session not found." }, { status: 404 });
@@ -35,6 +25,7 @@ export async function GET(
     token: session.token,
     createdAt: session.createdAt,
     status: session.status,
+    provider: session.provider,
   });
 }
 
@@ -46,41 +37,23 @@ export async function POST(
 
   let body: {
     provider?: string;
-    model?: string;
-    apiKey?: string;
   };
 
   try {
     body = (await req.json()) as {
       provider?: string;
-      model?: string;
-      apiKey?: string;
     };
   } catch {
     return Response.json({ error: "Invalid JSON body." }, { status: 400 });
   }
 
   const provider = (body.provider ?? "").trim();
-  const model = (body.model ?? "").trim();
-  const apiKey = (body.apiKey ?? "").trim();
 
   if (!isProvider(provider)) {
     return Response.json({ error: "Unsupported provider." }, { status: 400 });
   }
 
-  if (!model) {
-    return Response.json({ error: "Model is required." }, { status: 400 });
-  }
-
-  if (!apiKey) {
-    return Response.json({ error: "API key is required." }, { status: 400 });
-  }
-
-  const session = completeLoginSession(token, {
-    provider,
-    model,
-    apiKey,
-  });
+  const session = updateSession(token, provider);
 
   if (!session) {
     return Response.json({ error: "Login session not found." }, { status: 404 });

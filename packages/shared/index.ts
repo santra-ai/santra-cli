@@ -51,8 +51,7 @@ export {
 export type { ToolDefinition } from "./tools/index.ts";
 
 export type {
-  LoginProvider,
-  LoginSessionConfig,
+  AuthProvider,
   LoginSessionRecord,
 } from "./login-session.ts";
 export {

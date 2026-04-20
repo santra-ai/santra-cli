@@ -17,6 +17,7 @@ const PROVIDER_BASE_URLS: Record<string, string> = {
   "nvidia-nim": "https://integrate.api.nvidia.com/v1",
   ollama: "http://localhost:11434/v1",
 };
+const SANTRA_FALLBACK_MODEL = "meta/llama-3.1-8b-instruct";
 
 // ─── OpenAI-compatible streaming ──────────────────────────────────────────────
 
@@ -25,6 +26,7 @@ function openAICompatStream(
   baseUrl: string,
   model: string,
   messages: { role: string; content: string }[],
+  fallbackModel?: string,
 ): ReadableStream<Uint8Array> {
   return new ReadableStream<Uint8Array>({
     async start(controller) {
@@ -32,23 +34,57 @@ function openAICompatStream(
         try { controller.enqueue(enc.encode(sse(data))); } catch { /* ignore */ }
       };
       const close = () => { try { controller.close(); } catch { /* ignore */ } };
-
-      enq({ type: "start" });
-
-      let resp: Response;
-      try {
-        resp = await fetch(`${baseUrl}/chat/completions`, {
+      const invoke = (targetModel: string) =>
+        fetch(`${baseUrl}/chat/completions`, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
             Authorization: `Bearer ${apiKey}`,
           },
-          body: JSON.stringify({ model, messages, stream: true, max_tokens: 16384, temperature: 0.1 }),
+          body: JSON.stringify({
+            model: targetModel,
+            messages,
+            stream: true,
+            max_tokens: 16384,
+            temperature: 0.1,
+          }),
         });
+
+      enq({ type: "start" });
+
+      let resp: Response;
+      let activeModel = model;
+      try {
+        resp = await invoke(activeModel);
       } catch (err) {
         enq({ type: "error", message: err instanceof Error ? err.message : "Network error" });
         close();
         return;
+      }
+
+      if (!resp.ok) {
+        let detail = "";
+        try {
+          const body = await resp.json() as { error?: { message?: string }; message?: string; detail?: string };
+          detail = body.error?.message ?? body.message ?? body.detail ?? "";
+        } catch { detail = await resp.text().catch(() => ""); }
+
+        const shouldRetryWithFallback =
+          resp.status === 404 &&
+          fallbackModel &&
+          fallbackModel !== activeModel &&
+          /function .*not found/i.test(detail);
+
+        if (shouldRetryWithFallback) {
+          try {
+            activeModel = fallbackModel;
+            resp = await invoke(activeModel);
+          } catch (err) {
+            enq({ type: "error", message: err instanceof Error ? err.message : "Network error" });
+            close();
+            return;
+          }
+        }
       }
 
       if (!resp.ok) {
@@ -217,7 +253,11 @@ export async function POST(req: NextRequest): Promise<Response> {
   const fallbackApiKey = process.env["NVIDIA_API_KEY"] ?? "";
   const apiKey =
     accessMode === "santra" || !userApiKey ? fallbackApiKey : userApiKey;
-  const model = req.headers.get("x-santra-model") ?? process.env["NVIDIA_MODEL"] ?? "meta/llama-3.1-8b-instruct";
+  const hostedModel = process.env["NVIDIA_MODEL"] ?? SANTRA_FALLBACK_MODEL;
+  const model =
+    accessMode === "santra"
+      ? hostedModel
+      : req.headers.get("x-santra-model") ?? hostedModel;
   const customBaseUrl = req.headers.get("x-santra-base-url") ?? "";
   const effectiveProvider =
     accessMode === "santra" || !provider
@@ -262,7 +302,15 @@ export async function POST(req: NextRequest): Promise<Response> {
       customBaseUrl ||
       PROVIDER_BASE_URLS[effectiveProvider] ||
       PROVIDER_BASE_URLS["nvidia-nim"]!;
-    stream = openAICompatStream(apiKey, baseUrl, model, messages);
+    stream = openAICompatStream(
+      apiKey,
+      baseUrl,
+      model,
+      messages,
+      accessMode === "santra" && effectiveProvider === "nvidia-nim"
+        ? SANTRA_FALLBACK_MODEL
+        : undefined,
+    );
   }
 
   return new Response(stream, {

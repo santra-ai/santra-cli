@@ -6,7 +6,7 @@ import type { RunState } from "@santra/shared";
 const prompt = process.argv.slice(2).join(" ").trim();
 
 if (!prompt) {
-  console.error("Usage: bun cli/src/index.ts <your prompt here>");
+  console.error("Usage: santra <your prompt here>");
   process.exit(1);
 }
 
