@@ -6,7 +6,9 @@ import { installShellProfile } from "./src/utils/shell-profile";
 type Command = "install-shell" | "--install-shell" | "-i";
 
 function isInstallCommand(value: string | undefined): value is Command {
-  return value === "install-shell" || value === "--install-shell" || value === "-i";
+  return (
+    value === "install-shell" || value === "--install-shell" || value === "-i"
+  );
 }
 
 function printUsage(): void {
@@ -14,11 +16,16 @@ function printUsage(): void {
 }
 
 function runInstallShell(): void {
-  const dryRun = process.argv.includes("--dry-run") || process.argv.includes("-n");
+  const dryRun =
+    process.argv.includes("--dry-run") || process.argv.includes("-n");
   const results = installShellProfile(dryRun);
 
   for (const result of results) {
-    const status = result.changed ? (dryRun ? "would update" : "updated") : "already configured";
+    const status = result.changed
+      ? dryRun
+        ? "would update"
+        : "updated"
+      : "already configured";
     console.log(`${status}: ${result.filePath}`);
   }
 

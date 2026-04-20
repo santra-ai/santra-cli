@@ -31,25 +31,17 @@ export type TrialState = {
 export const SANTRA_HOSTED_MODEL = "meta/llama-3.1-8b-instruct";
 
 export const PROVIDER_LABELS: Record<Provider, string> = {
-  anthropic:   "Anthropic (Claude)",
-  openai:      "OpenAI (GPT-4o)",
-  "nvidia-nim":"Nvidia NIM",
-  groq:        "Groq",
-  together:    "Together AI",
-  ollama:      "Ollama (local)",
+  anthropic: "Anthropic (Claude)",
+  openai: "OpenAI (GPT-4o)",
+  "nvidia-nim": "Nvidia NIM",
+  groq: "Groq",
+  together: "Together AI",
+  ollama: "Ollama (local)",
 };
 
 export const PROVIDER_MODELS: Record<Provider, string[]> = {
-  anthropic: [
-    "claude-sonnet-4-6",
-    "claude-opus-4-7",
-    "claude-haiku-4-5",
-  ],
-  openai: [
-    "gpt-4o",
-    "gpt-4o-mini",
-    "o1-mini",
-  ],
+  anthropic: ["claude-sonnet-4-6", "claude-opus-4-7", "claude-haiku-4-5"],
+  openai: ["gpt-4o", "gpt-4o-mini", "o1-mini"],
   "nvidia-nim": [
     "meta/llama-3.1-405b-instruct",
     "meta/llama-3.1-70b-instruct",
@@ -76,7 +68,7 @@ export const PROVIDER_MODELS: Record<Provider, string[]> = {
 // Providers that need a base URL (ollama, self-hosted NIM)
 export const NEEDS_BASE_URL: Provider[] = ["ollama", "nvidia-nim"];
 
-const CONFIG_DIR  = getSantraHome();
+const CONFIG_DIR = getSantraHome();
 const CONFIG_PATH = join(CONFIG_DIR, "config.json");
 const TRIAL_PATH = join(CONFIG_DIR, "trial.json");
 const DEFAULT_TRIAL_TOKENS = 10_000;

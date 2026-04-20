@@ -7,9 +7,9 @@ const MANAGED_BLOCK_END = "# <<< Santra CLI managed block <<<";
 
 const MANAGED_BLOCK = [
   MANAGED_BLOCK_START,
-  '# Ensure the globally installed `santra` command is available in this shell.',
+  "# Ensure the globally installed `santra` command is available in this shell.",
   'export SANTRA_HOME="$HOME/.santra"',
-  'if command -v npm >/dev/null 2>&1; then',
+  "if command -v npm >/dev/null 2>&1; then",
   '  export PATH="$(npm prefix -g 2>/dev/null)/bin:$PATH"',
   "fi",
   MANAGED_BLOCK_END,
@@ -26,7 +26,9 @@ function getProfilePaths(): string[] {
 }
 
 function upsertManagedBlock(filePath: string): ShellProfileInstallResult {
-  const current = fs.existsSync(filePath) ? fs.readFileSync(filePath, "utf8") : "";
+  const current = fs.existsSync(filePath)
+    ? fs.readFileSync(filePath, "utf8")
+    : "";
 
   if (current.includes(MANAGED_BLOCK_START)) {
     return { filePath, changed: false };
@@ -42,12 +44,16 @@ function upsertManagedBlock(filePath: string): ShellProfileInstallResult {
   return { filePath, changed: true };
 }
 
-export function installShellProfile(dryRun = false): ShellProfileInstallResult[] {
+export function installShellProfile(
+  dryRun = false,
+): ShellProfileInstallResult[] {
   const results: ShellProfileInstallResult[] = [];
 
   for (const filePath of getProfilePaths()) {
     if (dryRun) {
-      const current = fs.existsSync(filePath) ? fs.readFileSync(filePath, "utf8") : "";
+      const current = fs.existsSync(filePath)
+        ? fs.readFileSync(filePath, "utf8")
+        : "";
       results.push({
         filePath,
         changed: !current.includes(MANAGED_BLOCK_START),
