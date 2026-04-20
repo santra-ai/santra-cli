@@ -130,17 +130,9 @@ function summarizeAgentOutput(
   agentId: string,
   output: string,
 ): string | undefined {
-  const cleaned = cleanAgentResponse(output);
-  if (!cleaned) return undefined;
-
-  // The main agent and file-picker often return short summaries that are useful
-  // to surface in the section footer.
-  if (agentId === "orchestrator" || agentId === "file-picker") {
-    return cleaned.length > 500 ? `${cleaned.slice(0, 500)}...` : cleaned;
-  }
-  
-  // The reader and executor final responses are streamed separately, so don't summarize them here
-  // to avoid duplicating their entire text block inside the section checkmark.
+  // The orchestrator's output IS the final user-facing response — it will be shown
+  // separately via the response entry. Surfacing it here too would duplicate it visibly.
+  // All other agents' responses are either streamed separately or not user-facing prose.
   return undefined;
 }
 

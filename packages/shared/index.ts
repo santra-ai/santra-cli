@@ -49,3 +49,16 @@ export {
   buildToolInstructionsPrompt,
 } from "./tools/index.ts";
 export type { ToolDefinition } from "./tools/index.ts";
+
+export type {
+  LoginProvider,
+  LoginSessionConfig,
+  LoginSessionRecord,
+} from "./login-session.ts";
+export {
+  createLoginSession,
+  readLoginSession,
+  completeLoginSession,
+  consumeCompletedLoginSession,
+  buildLoginUrl,
+} from "./login-session.ts";

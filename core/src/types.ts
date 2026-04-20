@@ -4,6 +4,7 @@ import type { FileChangeFeedback, UserQuestion } from "@santra/agent-runtime";
 export type RunnerOptions = {
   endpoint: string;
   useSwarm?: boolean;
+  authHeaders?: Record<string, string>;
 };
 
 export type RunOptions = {

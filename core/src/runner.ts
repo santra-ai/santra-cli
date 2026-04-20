@@ -105,8 +105,8 @@ export class Runner {
   constructor(options: RunnerOptions) {
     this.endpoint = options.endpoint;
     this.useSwarm = options.useSwarm;
-    this.agent = new BaseAgent(options.endpoint);
-    this.swarm = new Swarm(options.endpoint);
+    this.agent = new BaseAgent(options.endpoint, options.authHeaders);
+    this.swarm = new Swarm(options.endpoint, options.authHeaders);
   }
 
   private shouldUseSwarm(override?: boolean): boolean {

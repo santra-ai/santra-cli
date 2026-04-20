@@ -1,5 +1,12 @@
 import { Box, Text } from "ink";
 
+// Santra brand colors
+const ORANGE = "#F97316";
+const ORANGE_DIM = "#a34d0e";
+const MUTED = "#555555";
+const HINT = "#4a4a4a";
+const SUBTLE = "#333333";
+
 interface ChromeBarProps {
   width: number;
   scrollOffset: number;
@@ -16,21 +23,15 @@ function truncate(text: string, maxWidth: number): string {
 }
 
 export function ChromeBar({ width, scrollOffset, hiddenRowsAbove, projectName, interactionMode }: ChromeBarProps) {
-  const modeLabel = interactionMode === "scroll" ? "F2 select mode" : "F2 scroll mode";
+  const scrollState =
+    scrollOffset > 0 ? `↑ ${hiddenRowsAbove} lines` : "live";
+
   const hint =
     interactionMode === "scroll"
-      ? "Enter send  •  / commands  •  scroll wheel or ↑↓  •  F2 select mode  •  /copy  •  Esc stop"
-      : "Enter send  •  / commands  •  drag to select  •  F2 scroll mode  •  /copy  •  Esc stop";
-  const scrollState =
-    scrollOffset > 0 ? `↑ ${hiddenRowsAbove} earlier lines` : "Following live";
+      ? "↑↓ scroll  ·  Enter send  ·  / commands  ·  F2 select  ·  Esc stop"
+      : "drag to select  ·  Enter send  ·  / commands  ·  F2 scroll  ·  Esc stop";
 
-  // Right-side items: scroll state + app name
-  const appLabel = "santra";
-  const rightSection = `${modeLabel}  ${scrollState}  ${appLabel}`;
-  const rightWidth = Math.min(rightSection.length + 2, Math.floor(width * 0.45));
-
-  // Left side: project indicator
-  const leftMaxWidth = Math.max(10, width - rightWidth - 4);
+  const leftMaxWidth = Math.max(10, Math.floor(width * 0.5) - 12);
   const projectDisplay = truncate(projectName, leftMaxWidth);
 
   return (
@@ -41,18 +42,21 @@ export function ChromeBar({ width, scrollOffset, hiddenRowsAbove, projectName, i
       borderLeft={false}
       borderRight={false}
       borderBottom
-      borderColor="gray"
+      borderColor={SUBTLE}
     >
       <Box paddingX={1}>
-        <Box flexGrow={1}>
-          <Text color="#7CFFB2">◆ </Text>
-          <Text color="white" bold>{projectDisplay}</Text>
-        </Box>
-        <Text color="#808080">{truncate(scrollState, Math.max(12, Math.floor(width * 0.28)))}</Text>
-        <Text color="#606060">  santra</Text>
+        {/* Logo mark — circle echoes the Santra icon */}
+        <Text color={ORANGE} bold>● </Text>
+        <Text color={ORANGE} bold>santra</Text>
+        <Text color={MUTED}> / </Text>
+        <Text color="#c0c0c0">{projectDisplay}</Text>
+        <Box flexGrow={1} />
+        <Text color={scrollOffset > 0 ? ORANGE_DIM : MUTED}>
+          {scrollState}
+        </Text>
       </Box>
       <Box paddingX={1}>
-        <Text color="#606060" dimColor>
+        <Text color={HINT}>
           {truncate(hint, Math.max(18, width - 4))}
         </Text>
       </Box>

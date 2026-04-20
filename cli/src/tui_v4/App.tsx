@@ -1,18 +1,32 @@
 import path from "node:path";
 import { Box, useApp, useInput, useStdout } from "ink";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  buildLoginUrl,
+  consumeCompletedLoginSession,
+  createLoginSession,
+} from "@santra/shared";
 import { Composer } from "./components/Composer";
 import { TranscriptView } from "./components/TranscriptView";
 import { ChromeBar } from "./components/ChromeBar";
+import { WelcomeState } from "./components/WelcomeState";
+import { SetupFlow } from "./components/SetupFlow";
+import { LoginGate } from "./components/LoginGate";
 import { formatLogTranscriptRows } from "./formatLogTranscript";
 import useAgent from "./hooks/useAgent";
 import { getSlashSuggestions, sanitizeComposerInput } from "./input";
 import type { LogEntry } from "./types.ts";
 import type { TranscriptRow } from "./transcript.ts";
+import { configExists, writeConfig } from "../utils/config.ts";
 
 const PLACEHOLDER = "Ask the agent anything… (/ for commands)";
 const MOUSE_SCROLL_LINES = 3;
 type InteractionMode = "scroll" | "select";
+type LoginState = {
+  token: string;
+  url: string;
+  opened: boolean;
+};
 
 // Derived once at module load — never changes during a session
 const PROJECT_NAME = path.basename(process.cwd());
@@ -57,6 +71,14 @@ export function App() {
   const { exit } = useApp();
   const { stdout } = useStdout();
 
+  // ─── Setup flow ───────────────────────────────────────────────────────────
+  const [showSetup, setShowSetup] = useState(false);
+  const [loginState, setLoginState] = useState<LoginState | null>(null);
+  const loginPollRef = useRef<ReturnType<typeof setInterval> | undefined>(
+    undefined,
+  );
+  const startupLoginRef = useRef(false);
+
   // ─── Terminal dimensions ──────────────────────────────────────────────────
   const [termWidth, setTermWidth] = useState(stdout?.columns ?? 120);
   const [termHeight, setTermHeight] = useState(stdout?.rows ?? 30);
@@ -72,6 +94,96 @@ export function App() {
       stdout.off("resize", onResize);
     };
   }, [stdout]);
+
+  const openLoginUrl = useCallback((url: string): boolean => {
+    const commands =
+      process.platform === "darwin"
+        ? [["open", url]]
+        : process.platform === "win32"
+          ? [["cmd", "/c", "start", "", url]]
+          : [["xdg-open", url]];
+
+    for (const cmd of commands) {
+      const result = Bun.spawnSync({
+        cmd,
+        stdout: "ignore",
+        stderr: "ignore",
+      });
+      if (result.exitCode === 0) return true;
+    }
+
+    return false;
+  }, []);
+
+  const beginLoginFlow = useCallback(
+    (reuseExisting = false) => {
+      if (reuseExisting && loginState) {
+        const reopened = openLoginUrl(loginState.url);
+        setLoginState((current) =>
+          current ? { ...current, opened: current.opened || reopened } : current,
+        );
+        return;
+      }
+
+      const session = createLoginSession();
+      const url = buildLoginUrl(session.token);
+      const opened = openLoginUrl(url);
+      setLoginState({
+        token: session.token,
+        url,
+        opened,
+      });
+    },
+    [loginState, openLoginUrl],
+  );
+
+  useEffect(() => {
+    if (!startupLoginRef.current && !configExists()) {
+      startupLoginRef.current = true;
+      beginLoginFlow();
+    }
+  }, [beginLoginFlow]);
+
+  useEffect(() => {
+    if (!loginState) {
+      if (loginPollRef.current !== undefined) {
+        clearInterval(loginPollRef.current);
+        loginPollRef.current = undefined;
+      }
+      return;
+    }
+
+    loginPollRef.current = setInterval(() => {
+      const completed = consumeCompletedLoginSession(loginState.token);
+      if (!completed?.config) return;
+
+      writeConfig({
+        version: 2,
+        authMode: "byok",
+        provider: completed.config.provider,
+        model: completed.config.model,
+        apiKey: completed.config.apiKey,
+      });
+
+      setLoginState(null);
+      setCumulativeLog((prev) => [
+        ...prev,
+        {
+          id: `login-complete-${Date.now()}`,
+          time: new Date().toTimeString().slice(0, 8),
+          level: "ok" as const,
+          message: "Connected Santra CLI.",
+        },
+      ]);
+    }, 1000);
+
+    return () => {
+      if (loginPollRef.current !== undefined) {
+        clearInterval(loginPollRef.current);
+        loginPollRef.current = undefined;
+      }
+    };
+  }, [loginState]);
 
   // ─── Agent runtime ────────────────────────────────────────────────────────
   const {
@@ -94,7 +206,14 @@ export function App() {
   // ─── Cumulative log (accumulates finished runs within this session) ───────
   // useAgent resets its log on each new submit(); we persist completed runs
   // here so the transcript shows full conversation history.
-  const [cumulativeLog, setCumulativeLog] = useState<LogEntry[]>([]);
+  const [cumulativeLog, setCumulativeLog] = useState<LogEntry[]>([
+    {
+      id: "welcome",
+      time: new Date().toTimeString().slice(0, 8),
+      level: "info" as const,
+      message: `santra  ·  ${PROJECT_NAME}`,
+    },
+  ]);
   const logRef = useRef<LogEntry[]>(log);
   logRef.current = log;
 
@@ -136,6 +255,7 @@ export function App() {
     () => [...cumulativeLog, ...log],
     [cumulativeLog, log],
   );
+
 
   // ─── Input state ──────────────────────────────────────────────────────────
   const [inputValue, setInputValue] = useState("");
@@ -184,6 +304,17 @@ export function App() {
   // Intercept /clear to also wipe cumulative history
   const handleCommandV4 = useCallback(
     (cmd: string, arg?: string) => {
+      if (cmd === "setup") {
+        setLoginState(null);
+        setShowSetup(true);
+        return;
+      }
+
+      if (cmd === "login") {
+        beginLoginFlow();
+        return;
+      }
+
       if (cmd === "clear") {
         clearAll();
         return;
@@ -221,7 +352,8 @@ export function App() {
             id: `help-copy-${Date.now()}`,
             time: new Date().toTimeString().slice(0, 8),
             level: "info" as const,
-            message: "/copy  copy the visible transcript to your clipboard",
+            message:
+              "/copy  copy transcript  ·  /setup configure provider  ·  /login open auth link",
           },
         ]);
         return;
@@ -229,7 +361,7 @@ export function App() {
 
       handleCommand(cmd, arg);
     },
-    [clearAll, handleCommand, transcriptRows],
+    [beginLoginFlow, clearAll, handleCommand, transcriptRows],
   );
 
   // ─── Scroll state ─────────────────────────────────────────────────────────
@@ -305,8 +437,13 @@ export function App() {
       process.stdout.write("\x1b[?1000l\x1b[?1006l");
     };
 
-    if (interactionMode === "scroll") enableScrollMode();
-    else enableSelectMode();
+    if (showSetup || loginState) {
+      enableSelectMode();
+    } else if (interactionMode === "scroll") {
+      enableScrollMode();
+    } else {
+      enableSelectMode();
+    }
 
     const onData = (data: Buffer) => {
       const str = data.toString();
@@ -316,7 +453,7 @@ export function App() {
         return;
       }
 
-      if (interactionMode !== "scroll") return;
+      if (showSetup || loginState || interactionMode !== "scroll") return;
 
       const sgrRe = /\x1b\[<(\d+);(\d+);(\d+)[Mm]/g;
       let match: RegExpExecArray | null;
@@ -348,7 +485,7 @@ export function App() {
       process.stdout.write("\x1b[?1000l\x1b[?1006l");
       process.stdin.off("data", onData);
     };
-  }, [handleMouseScroll, interactionMode, toggleInteractionMode]);
+  }, [handleMouseScroll, interactionMode, loginState, showSetup, toggleInteractionMode]);
 
   // ─── Suggestion execution ─────────────────────────────────────────────────
   const executeSuggestion = useCallback(() => {
@@ -378,6 +515,25 @@ export function App() {
     if (key.ctrl && input === "c") {
       if (busy) abortCurrentRun("keyboard");
       else exit();
+      return;
+    }
+
+    if (showSetup) {
+      return;
+    }
+
+    if (loginState) {
+      if (!key.ctrl && !key.meta && (input === "o" || input === "O")) {
+        beginLoginFlow(true);
+        return;
+      }
+
+      if (!key.ctrl && !key.meta && (input === "s" || input === "S")) {
+        setLoginState(null);
+        setShowSetup(true);
+        return;
+      }
+
       return;
     }
 
@@ -602,6 +758,36 @@ export function App() {
   });
 
   // ─── Render ───────────────────────────────────────────────────────────────
+  const isWelcomeState = displayLog.length === 1 && displayLog[0]?.id === 'welcome' && !busy;
+
+  if (showSetup) {
+    return (
+      <Box flexDirection="column" width={termWidth} height={termHeight}>
+        <SetupFlow onComplete={() => setShowSetup(false)} />
+      </Box>
+    );
+  }
+
+  if (loginState) {
+    return (
+      <Box flexDirection="column" width={termWidth} height={termHeight}>
+        <ChromeBar
+          width={termWidth}
+          scrollOffset={0}
+          hiddenRowsAbove={0}
+          projectName={PROJECT_NAME}
+          interactionMode={interactionMode}
+        />
+        <LoginGate
+          width={termWidth}
+          height={scrollViewportHeight}
+          url={loginState.url}
+          opened={loginState.opened}
+        />
+      </Box>
+    );
+  }
+
   return (
     <Box flexDirection="column" width={termWidth} height={termHeight}>
       <ChromeBar
@@ -611,12 +797,16 @@ export function App() {
         projectName={PROJECT_NAME}
         interactionMode={interactionMode}
       />
-      <TranscriptView
-        rows={transcriptRows}
-        width={termWidth}
-        height={scrollViewportHeight}
-        scrollOffset={scrollOffset}
-      />
+      {isWelcomeState ? (
+        <WelcomeState width={termWidth} height={scrollViewportHeight} />
+      ) : (
+        <TranscriptView
+          rows={transcriptRows}
+          width={termWidth}
+          height={scrollViewportHeight}
+          scrollOffset={scrollOffset}
+        />
+      )}
       <Box paddingTop={1} width={termWidth}>
         <Composer
           value={inputValue}

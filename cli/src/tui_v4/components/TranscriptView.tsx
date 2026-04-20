@@ -2,17 +2,18 @@ import { Box, Text } from "ink";
 import Spinner from "ink-spinner";
 import type { TranscriptRow, TranscriptSegment } from "../transcript.ts";
 
+// Santra brand palette for transcript rendering
 const TONE_TO_COLOR: Record<string, string> = {
-  default: "white",
-  accent: "#ddb27f",
-  muted: "#b0b0b0",
-  success: "green",
-  warning: "yellow",
-  danger: "red",
-  code: "#9bbcff",
-  heading: "yellow",
-  file: "#8aaee2",
-  command: "#9acb88",
+  default: "#d4d4d4",
+  accent: "#F97316",    // santra orange — used for user prompts, key highlights
+  muted: "#666666",
+  success: "#5a9a72",
+  warning: "#c8922a",
+  danger: "#b05555",
+  code: "#8aacde",
+  heading: "#fdba74",   // light orange — warm brand tone without being too bright
+  file: "#7a9dc5",
+  command: "#7aaa6a",
 };
 
 function renderSegments(segments: TranscriptSegment[]) {

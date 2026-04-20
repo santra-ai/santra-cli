@@ -17,6 +17,7 @@ import type { FileChangeFeedback, UserQuestion } from "./base-agent.ts";
 export type SwarmOptions = {
   task: string;
   endpoint: string;
+  extraHeaders?: Record<string, string>;
   previousMessages?: Message[];
   onPhase?: (phase: AgentPhase) => void;
   abortSignal?: AbortSignal;
@@ -100,8 +101,8 @@ function parseSpawnSpecs(value: unknown): SpawnSpec[] | null {
 export class Swarm {
   private agent: BaseAgent;
 
-  constructor(endpoint: string) {
-    this.agent = new BaseAgent(endpoint);
+  constructor(endpoint: string, extraHeaders?: Record<string, string>) {
+    this.agent = new BaseAgent(endpoint, extraHeaders);
   }
 
   async run(options: SwarmOptions): Promise<SwarmState> {

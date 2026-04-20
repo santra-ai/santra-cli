@@ -13,6 +13,8 @@ const BASE_COMMANDS: SlashCommand[] = [
   { name: "/copy", description: "Copy the visible transcript", kind: "command" },
   { name: "/stop", description: "Stop the running agent", kind: "command" },
   { name: "/model", description: "Show the current model", kind: "command" },
+  { name: "/setup", description: "Configure provider and API key", kind: "command" },
+  { name: "/login", description: "Show the sign-in and key management link", kind: "command" },
   { name: "/help", description: "Show available commands", kind: "command" },
 ];
 

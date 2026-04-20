@@ -7,6 +7,7 @@ import type {
 } from "@santra/shared";
 import type { FileChangeFeedback, UserQuestion } from "@santra/agent-runtime";
 import { Client } from "../../client.ts";
+import { readConfig } from "../../utils/config.ts";
 import {
   createChatId,
   listSavedChats,
@@ -136,6 +137,9 @@ function buildErroredRunState(
   };
 }
 
+const LOGIN_URL =
+  process.env["SANTRA_LOGIN_URL"] ?? "http://localhost:3000/login";
+
 function labelForAgent(id: string): string {
   return (
     TASK_LABELS[id] ??
@@ -196,8 +200,8 @@ const INITIAL_TASKS: Task[] = [
 ];
 
 function makeInitialStats(): AgentStats {
-  const model = (process.env["NVIDIA_MODEL"] ??
-    "meta/llama-3.1-8b-instruct") as AvailableModelId;
+  const config = readConfig();
+  const model = (config?.model ?? process.env["NVIDIA_MODEL"] ?? "meta/llama-3.1-8b-instruct") as AvailableModelId;
   return {
     model,
     tokens: 0,
@@ -376,8 +380,10 @@ export default function useAgent(): UseAgentReturn {
     (rawChunk: string) => {
       const streamAsFinalResponse = (
         agentId: string,
-      ): agentId is "reader" | "executor" =>
-        agentId === "reader" || agentId === "executor";
+      ): agentId is "orchestrator" | "reader" | "executor" =>
+        agentId === "orchestrator" ||
+        agentId === "reader" ||
+        agentId === "executor";
 
       const normalizedChunk = normalizeAgentMarkupChunk(rawChunk);
 
@@ -1294,9 +1300,24 @@ export default function useAgent(): UseAgentReturn {
               id: makeId(),
               time: timeStamp(),
               level: "info",
-              message: "/clear  /copy  /resume [id]  /stop  /model  /help",
+              message:
+                "/clear  /copy  /resume [id]  /stop  /model  /setup  /login  /help",
             },
           ]);
+          break;
+        case "login":
+          setLog((prev) => [
+            ...prev,
+            {
+              id: makeId(),
+              time: timeStamp(),
+              level: "info",
+              message: `Open ${LOGIN_URL} to sign in with Google or GitHub and manage API keys.`,
+            },
+          ]);
+          break;
+        case "setup":
+          // handled by App.tsx — no-op here to prevent "unknown command"
           break;
         default:
           setLog((prev) => [

@@ -484,8 +484,14 @@ function sleepMs(ms: number, signal?: AbortSignal): Promise<void> {
 
 export class BaseAgent {
   private activeEndpoint?: string;
+  private readonly extraHeaders: Record<string, string>;
 
-  constructor(private readonly endpoint: string) {}
+  constructor(
+    private readonly endpoint: string,
+    extraHeaders?: Record<string, string>,
+  ) {
+    this.extraHeaders = extraHeaders ?? {};
+  }
 
   private getCandidateEndpoints(): string[] {
     const base = this.activeEndpoint ?? this.endpoint;
@@ -553,6 +559,7 @@ export class BaseAgent {
           headers: {
             "Content-Type": "application/json",
             Accept: "text/event-stream",
+            ...this.extraHeaders,
           },
           body: JSON.stringify(body),
           signal: combinedSignal,
@@ -997,8 +1004,17 @@ export class BaseAgent {
       }
     }
 
+    const finalMessages =
+      finalText &&
+      !(
+        messages.at(-1)?.role === "assistant" &&
+        messages.at(-1)?.content.trim() === finalText.trim()
+      )
+        ? [...messages, { role: "assistant" as const, content: finalText }]
+        : messages;
+
     return {
-      messages: [...messages, { role: "assistant", content: finalText }],
+      messages: finalMessages,
       output: { type: "text", content: finalText },
       toolCalls: allToolResults,
       thinking: allThinking,
