@@ -19,6 +19,8 @@ function runInstallShell(): void {
   const dryRun =
     process.argv.includes("--dry-run") || process.argv.includes("-n");
   const results = installShellProfile(dryRun);
+  const shell = process.env["SHELL"] ?? "";
+  const shellRc = shell.includes("zsh") ? "~/.zshrc" : "~/.bashrc";
 
   for (const result of results) {
     const status = result.changed
@@ -32,8 +34,14 @@ function runInstallShell(): void {
   console.log(
     dryRun
       ? "Dry run complete. Restart your shell after applying the changes manually."
-      : "Shell profile updated. Restart your shell, then run `santra` from any repo.",
+      : `Shell profile updated. Run 'source ${shellRc}' (or restart your terminal), then run 'santra'.`,
   );
+
+  if (!dryRun) {
+    console.log(
+      "If 'santra' is still not found, run: npx santra --install-shell",
+    );
+  }
 }
 
 const [command] = process.argv.slice(2);

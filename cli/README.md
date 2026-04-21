@@ -14,8 +14,16 @@ Santra is a CLI-based coding assistant designed to help developers with their co
 To get started with Santra, follow these steps:
 
 1. Install Santra using npm: `npm install -g santra`
-2. Add the `santra` command to your shell PATH: `santra install-shell`
-3. Restart your shell, then run Santra in your project directory: `santra`
+2. PATH setup is attempted automatically during install.
+3. If `santra` is still not in PATH, run setup manually: `npx santra --install-shell`
+4. Apply the profile update without restarting:
+
+- zsh: `source ~/.zshrc`
+- bash: `source ~/.bashrc`
+
+5. Run Santra in your project directory: `santra`
+
+If you'd rather avoid global install, you can run Santra directly with `npx santra`.
 
 ## Usage
 

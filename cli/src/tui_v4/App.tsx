@@ -125,7 +125,7 @@ export function App() {
   }, []);
 
   const beginLoginFlow = useCallback(
-    async (reuseExisting = false) => {
+    async (reuseExisting = false, autoOpen = true) => {
       if (reuseExisting && loginState) {
         const reopened = openLoginUrl(loginState.url);
         setLoginState((current) =>
@@ -161,7 +161,7 @@ export function App() {
       }
 
       const url = buildLoginUrl(token);
-      const opened = openLoginUrl(url);
+      const opened = autoOpen ? openLoginUrl(url) : false;
       setLoginState({
         token,
         url,
@@ -379,7 +379,7 @@ export function App() {
     (cmd: string, arg?: string) => {
       if (cmd === "setup") {
         if (!authExists()) {
-          beginLoginFlow();
+          beginLoginFlow(false, false);
           setCumulativeLog((prev) => [
             ...prev,
             {
@@ -398,7 +398,7 @@ export function App() {
       }
 
       if (cmd === "login") {
-        beginLoginFlow();
+        beginLoginFlow(false, true);
         return;
       }
 
