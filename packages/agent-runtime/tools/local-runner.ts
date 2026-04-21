@@ -2,6 +2,7 @@ import type { ToolCallRequest, ToolCallResult } from "@santra/shared";
 import { readdir, readFile, writeFile, mkdir, stat } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { join, dirname, resolve } from "node:path";
+import { tmpdir } from "node:os";
 
 // Files larger than this are truncated to prevent context overflow.
 const MAX_READ_BYTES = 40_000; // ~40KB — enough for any real source file
@@ -75,6 +76,32 @@ async function handleWriteFile(p: Record<string, unknown>): Promise<string> {
   });
 }
 
+async function handleApplyPatch(p: Record<string, unknown>): Promise<string> {
+  const patch = p["patch"] as string | undefined;
+  if (!patch?.trim()) throw new Error("apply_patch: 'patch' is required");
+
+  const patchPath = resolve(
+    tmpdir(),
+    `santra-${Date.now()}-${Math.random().toString(36).slice(2)}.patch`,
+  );
+  await writeFile(patchPath, patch, "utf-8");
+
+  const proc = Bun.spawnSync({
+    cmd: ["git", "apply", "--whitespace=nowarn", patchPath],
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+
+  if (proc.exitCode !== 0) {
+    const stderr = new TextDecoder().decode(proc.stderr).trim();
+    throw new Error(stderr || "apply_patch failed");
+  }
+
+  return JSON.stringify({
+    message: "Patch applied successfully",
+  });
+}
+
 // Directories and files to hide from listing — they're noise for the agent.
 const IGNORED_NAMES = new Set([
   "node_modules", ".git", ".santra-logs", ".next", "dist", "build",
@@ -103,9 +130,8 @@ async function handleListDirectory(
 
 // Find files matching a glob pattern under a given working directory.
 async function handleSearchFiles(p: Record<string, unknown>): Promise<string> {
-  const pattern = p["pattern"] as string;
+  const pattern = (p["pattern"] as string | undefined) ?? (p["glob"] as string | undefined) ?? "**/*";
   const cwd = (p["cwd"] as string) ?? ".";
-  if (!pattern) throw new Error("search_files: 'pattern' is required");
   const absCwd = resolve(process.cwd(), cwd);
   const glob = new Bun.Glob(pattern);
   const files: string[] = [];
@@ -118,6 +144,90 @@ async function handleSearchFiles(p: Record<string, unknown>): Promise<string> {
     absoluteCwd: absCwd,
     files,
     count: files.length,
+  });
+}
+
+async function handleGlob(p: Record<string, unknown>): Promise<string> {
+  return handleSearchFiles(p);
+}
+
+async function collectFilesForTextSearch(
+  cwd: string,
+  globPattern?: string,
+): Promise<string[]> {
+  const absCwd = resolve(process.cwd(), cwd);
+  const files: string[] = [];
+
+  if (globPattern) {
+    const glob = new Bun.Glob(globPattern);
+    for await (const file of glob.scan({ cwd: absCwd, onlyFiles: true })) {
+      files.push(file);
+    }
+    return files;
+  }
+
+  const walk = async (relPath: string) => {
+    const abs = resolve(absCwd, relPath);
+    const entries = await readdir(abs, { withFileTypes: true });
+    for (const entry of entries) {
+      if (IGNORED_NAMES.has(entry.name) || entry.name.startsWith(".")) continue;
+      const childRel = relPath ? join(relPath, entry.name) : entry.name;
+      if (entry.isDirectory()) {
+        await walk(childRel);
+      } else {
+        files.push(childRel);
+      }
+    }
+  };
+
+  await walk("");
+  return files;
+}
+
+async function fallbackSearchText(
+  query: string,
+  cwd: string,
+  glob?: string,
+): Promise<string> {
+  const files = await collectFilesForTextSearch(cwd, glob);
+  const matches: Array<{ file: string; line: number; text: string }> = [];
+  const needle = query.toLowerCase();
+  const absCwd = resolve(process.cwd(), cwd);
+
+  for (const file of files) {
+    if (matches.length >= 200) break;
+
+    const absFile = resolve(absCwd, file);
+    let raw = "";
+    try {
+      raw = await readFile(absFile, "utf-8");
+    } catch {
+      continue;
+    }
+
+    if (raw.includes("\u0000")) continue;
+
+    const lines = raw.split("\n");
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i] ?? "";
+      if (line.toLowerCase().includes(needle)) {
+        matches.push({
+          file,
+          line: i + 1,
+          text: line,
+        });
+        if (matches.length >= 200) break;
+      }
+    }
+  }
+
+  return JSON.stringify({
+    query,
+    cwd,
+    glob: glob ?? null,
+    count: matches.length,
+    matches,
+    engine: "fallback",
   });
 }
 
@@ -138,14 +248,26 @@ async function handleSearchText(p: Record<string, unknown>): Promise<string> {
 
   cmd.push(query, absCwd);
 
-  const proc = Bun.spawnSync({
-    cmd,
-    stdout: "pipe",
-    stderr: "pipe",
-  });
+  let proc: ReturnType<typeof Bun.spawnSync>;
+  try {
+    proc = Bun.spawnSync({
+      cmd,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (/Executable not found in \$PATH:\s*"rg"/.test(message)) {
+      return fallbackSearchText(query, cwd, glob);
+    }
+    throw error;
+  }
 
   if (proc.exitCode !== 0 && proc.exitCode !== 1) {
     const stderr = new TextDecoder().decode(proc.stderr).trim();
+    if (/Executable not found in \$PATH:\s*"rg"/.test(stderr)) {
+      return fallbackSearchText(query, cwd, glob);
+    }
     throw new Error(stderr || "search_text failed");
   }
 
@@ -170,7 +292,200 @@ async function handleSearchText(p: Record<string, unknown>): Promise<string> {
     glob: glob ?? null,
     count: matches.length,
     matches,
+    engine: "rg",
   });
+}
+
+async function handleCodeSearch(p: Record<string, unknown>): Promise<string> {
+  return handleSearchText(p);
+}
+
+async function handleReadSubtree(p: Record<string, unknown>): Promise<string> {
+  const path = p["path"] as string;
+  const maxChars = Number(p["max_chars"] ?? 12_000);
+  if (!path) throw new Error("read_subtree: 'path' is required");
+
+  const absRoot = resolve(process.cwd(), path);
+  if (!existsSync(absRoot)) throw new Error(`read_subtree: not found: ${path}`);
+  const info = await stat(absRoot);
+  if (!info.isDirectory()) {
+    throw new Error(`read_subtree: '${path}' is not a directory`);
+  }
+
+  const sections: string[] = [];
+  let total = 0;
+
+  const walk = async (relPath: string) => {
+    if (total >= maxChars) return;
+    const abs = resolve(process.cwd(), relPath);
+    const entries = await readdir(abs, { withFileTypes: true });
+
+    for (const entry of entries) {
+      if (total >= maxChars) break;
+      if (IGNORED_NAMES.has(entry.name) || entry.name.startsWith(".")) continue;
+
+      const childRel = join(relPath, entry.name);
+      if (entry.isDirectory()) {
+        sections.push(`## ${childRel}/`);
+        total += childRel.length + 4;
+        await walk(childRel);
+        continue;
+      }
+
+      const raw = await readFile(resolve(process.cwd(), childRel), "utf-8");
+      const remaining = Math.max(0, maxChars - total);
+      const snippet = raw.slice(0, remaining);
+      sections.push(`--- ${childRel} ---\n${snippet}`);
+      total += childRel.length + snippet.length + 10;
+    }
+  };
+
+  await walk(path);
+
+  return JSON.stringify({
+    path,
+    absolutePath: absRoot,
+    maxChars,
+    truncated: total >= maxChars,
+    content: sections.join("\n\n"),
+  });
+}
+
+async function handleWriteTodos(p: Record<string, unknown>): Promise<string> {
+  const rawTodos = p["todos"];
+  const todos =
+    typeof rawTodos === "string"
+      ? JSON.parse(rawTodos) as unknown
+      : rawTodos;
+
+  if (!Array.isArray(todos)) {
+    throw new Error("write_todos: 'todos' must be an array or JSON array string");
+  }
+
+  return JSON.stringify({
+    message: "Todo list recorded for this turn",
+    todos,
+    count: todos.length,
+  });
+}
+
+async function handleRunTerminalCommand(
+  p: Record<string, unknown>,
+): Promise<string> {
+  const command = p["command"] as string | undefined;
+  const cwd = (p["cwd"] as string | undefined) ?? process.cwd();
+  const timeout = Number(p["timeout_ms"] ?? 30_000);
+  if (!command?.trim()) {
+    throw new Error("run_terminal_command: 'command' is required");
+  }
+
+  const proc = Bun.spawnSync({
+    cmd: ["zsh", "-lc", command],
+    cwd: resolve(process.cwd(), cwd),
+    stdout: "pipe",
+    stderr: "pipe",
+    env: process.env,
+    timeout,
+  });
+
+  return JSON.stringify({
+    command,
+    cwd,
+    exitCode: proc.exitCode,
+    stdout: new TextDecoder().decode(proc.stdout).trim(),
+    stderr: new TextDecoder().decode(proc.stderr).trim(),
+  });
+}
+
+async function handleSuggestFollowups(
+  p: Record<string, unknown>,
+): Promise<string> {
+  const raw = p["suggestions"];
+  const suggestions =
+    typeof raw === "string" ? (JSON.parse(raw) as unknown) : raw;
+  if (!Array.isArray(suggestions)) {
+    throw new Error(
+      "suggest_followups: 'suggestions' must be an array or JSON array string",
+    );
+  }
+  return JSON.stringify({
+    suggestions,
+    count: suggestions.length,
+  });
+}
+
+async function handleAskUser(p: Record<string, unknown>): Promise<string> {
+  const rawQuestions = p["questions"];
+  const singleQuestion = p["question"] as string | undefined;
+  let questions: Array<Record<string, unknown>> = [];
+
+  if (typeof rawQuestions === "string") {
+    try {
+      questions = JSON.parse(rawQuestions) as Array<Record<string, unknown>>;
+    } catch {
+      throw new Error("ask_user: 'questions' must be valid JSON");
+    }
+  } else if (Array.isArray(rawQuestions)) {
+    questions = rawQuestions as Array<Record<string, unknown>>;
+  }
+
+  if (!questions.length && singleQuestion?.trim()) {
+    questions = [{ question: singleQuestion.trim() }];
+  }
+
+  if (!questions.length) {
+    throw new Error("ask_user: 'questions' is required");
+  }
+
+  return JSON.stringify({
+    paused: true,
+    supported: false,
+    questions,
+    message:
+      "ask_user is not yet fully interactive in this CLI session, so the request was recorded but not shown as a dedicated questionnaire.",
+  });
+}
+
+async function handleWebSearch(p: Record<string, unknown>): Promise<string> {
+  const query = p["query"] as string | undefined;
+  if (!query?.trim()) throw new Error("web_search: 'query' is required");
+
+  const url = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
+  const response = await fetch(url, {
+    headers: {
+      "User-Agent": "Mozilla/5.0 Santra/1.0",
+    },
+  });
+  const html = await response.text();
+  const matches = [...html.matchAll(/<a[^>]+class="result__a"[^>]*href="([^"]+)"[^>]*>(.*?)<\/a>/g)]
+    .slice(0, 5)
+    .map((match) => ({
+      url: match[1],
+      title: (match[2] ?? "").replace(/<[^>]+>/g, "").trim(),
+    }));
+
+  return JSON.stringify({
+    query,
+    results: matches,
+    count: matches.length,
+  });
+}
+
+async function handleReadDocs(p: Record<string, unknown>): Promise<string> {
+  const source = p["source"] as string | undefined;
+  if (!source?.trim()) throw new Error("read_docs: 'source' is required");
+
+  if (/^https?:\/\//i.test(source)) {
+    const response = await fetch(source);
+    const text = await response.text();
+    return JSON.stringify({
+      source,
+      content: text.slice(0, MAX_READ_BYTES),
+      truncated: text.length > MAX_READ_BYTES,
+    });
+  }
+
+  return handleReadFile({ path: source });
 }
 
 async function handleGetCwd(): Promise<string> {
@@ -195,6 +510,9 @@ export async function executeToolCall(
       case "str_replace":
         output = await handleStrReplace(call.parameters);
         break;
+      case "apply_patch":
+        output = await handleApplyPatch(call.parameters);
+        break;
       case "list_directory":
         output = await handleListDirectory(call.parameters);
         break;
@@ -203,6 +521,42 @@ export async function executeToolCall(
         break;
       case "search_text":
         output = await handleSearchText(call.parameters);
+        break;
+      case "glob":
+        output = await handleGlob(call.parameters);
+        break;
+      case "code_search":
+        output = await handleCodeSearch(call.parameters);
+        break;
+      case "read_subtree":
+        output = await handleReadSubtree(call.parameters);
+        break;
+      case "write_todos":
+        output = await handleWriteTodos(call.parameters);
+        break;
+      case "run_terminal_command":
+        output = await handleRunTerminalCommand(call.parameters);
+        break;
+      case "suggest_followups":
+        output = await handleSuggestFollowups(call.parameters);
+        break;
+      case "ask_user":
+        output = await handleAskUser(call.parameters);
+        break;
+      case "web_search":
+        output = await handleWebSearch(call.parameters);
+        break;
+      case "read_docs":
+        output = await handleReadDocs(call.parameters);
+        break;
+      case "set_output":
+      case "set_messages":
+      case "task_completed":
+      case "lookup_agent_info":
+        output = JSON.stringify({
+          ok: true,
+          note: `${call.name} is handled by the agent runtime`,
+        });
         break;
       case "get_cwd":
         output = await handleGetCwd();

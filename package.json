@@ -1,6 +1,6 @@
 {
   "name": "santra-project",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "description": "Santra monorepo for CLI, web, backend, and shared packages.",
   "private": true,
   "type": "module",
@@ -12,9 +12,12 @@
   "scripts": {
     "web": "cd web && bun run dev",
     "cli": "bun cli/index.ts",
-    "tui": "bun cli/src/tui/index.tsx",
-    "tui:v3": "bun cli/src/tui_v3/index.tsx",
-    "typecheck": "bunx tsc --noEmit --project tsconfig.json"
+    "tui": "bun cli/src/tui_v4/index.tsx",
+    "tui:v5": "bun cli/src/tui_v5/index.tsx",
+    "typecheck": "bunx tsc --noEmit --project tsconfig.json",
+    "build": "bun run typecheck && bun run --cwd web build",
+    "test": "bun test core/src/classifier.test.ts packages/agent-runtime/tools/parser.test.ts packages/agent-runtime/tools/local-runner.test.ts",
+    "check": "npm run build && npm run test"
   },
   "workspaces": [
     "web",

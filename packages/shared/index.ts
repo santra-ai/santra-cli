@@ -13,6 +13,30 @@ export type {
   SwarmState,
   CompletionRequest,
 } from "./types/types.ts";
+export type {
+  AgentOutputMode,
+  AgentSchemaProperty,
+  AgentJsonSchema,
+  ProgrammaticToolCall,
+  StepText,
+  GenerateN,
+  AgentStateView,
+  AgentStepContext,
+  StepExecutionResult,
+  StepGeneratorYield,
+  StepGeneratorLike,
+  AgentHandleSteps,
+  AgentTemplate,
+  LoadedAgentTemplates,
+} from "./types/agents.ts";
+export {
+  isProgrammaticToolCall,
+  isStepText,
+  isGenerateN,
+  isStepGeneratorYield,
+  normalizeStructuredOutput,
+  buildToolCallRequest,
+} from "./types/agents.ts";
 
 export { AVAILABLE_MODELS } from "./constants/models.ts";
 export type { AvailableModelId } from "./constants/models.ts";
@@ -25,3 +49,15 @@ export {
   buildToolInstructionsPrompt,
 } from "./tools/index.ts";
 export type { ToolDefinition } from "./tools/index.ts";
+
+export type {
+  AuthProvider,
+  LoginSessionRecord,
+} from "./login-session.ts";
+export {
+  createLoginSession,
+  readLoginSession,
+  completeLoginSession,
+  consumeCompletedLoginSession,
+  buildLoginUrl,
+} from "./login-session.ts";

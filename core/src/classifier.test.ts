@@ -78,6 +78,12 @@ describe("classifyPrompt", () => {
     test('"tell me about monorepos" → direct_answer', () => {
       expect(classifyPrompt("tell me about monorepos")).toBe("direct_answer");
     });
+
+    test('"tell me an essay on cow in 500 words" → direct_answer', () => {
+      expect(classifyPrompt("tell me an essay on cow in 500 words")).toBe(
+        "direct_answer",
+      );
+    });
   });
 
   // ── agent_task ─────────────────────────────────────────────────────────
@@ -132,6 +138,46 @@ describe("classifyPrompt", () => {
 
     test('"walk me through this repo" → agent_task', () => {
       expect(classifyPrompt("walk me through this repo")).toBe("agent_task");
+    });
+
+    test('"read the whole codebase and explain it to me" → agent_task', () => {
+      expect(
+        classifyPrompt("read the whole codebase and explain it to me"),
+      ).toBe("agent_task");
+    });
+
+    test('"update my README with relevant repository data" → agent_task', () => {
+      expect(
+        classifyPrompt("update my README with relevant repository data"),
+      ).toBe("agent_task");
+    });
+
+    test('"create a README for this repo" → agent_task', () => {
+      expect(classifyPrompt("create a README for this repo")).toBe(
+        "agent_task",
+      );
+    });
+
+    test('"write docs for the repository" → agent_task', () => {
+      expect(classifyPrompt("write docs for the repository")).toBe(
+        "agent_task",
+      );
+    });
+
+    test('"update my README" → agent_task', () => {
+      expect(classifyPrompt("update my README")).toBe("agent_task");
+    });
+
+    test('"rewrite the README for this project" → agent_task', () => {
+      expect(classifyPrompt("rewrite the README for this project")).toBe(
+        "agent_task",
+      );
+    });
+
+    test('"create documentation for my project" → agent_task', () => {
+      expect(classifyPrompt("create documentation for my project")).toBe(
+        "agent_task",
+      );
     });
   });
 

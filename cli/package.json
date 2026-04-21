@@ -1,28 +1,45 @@
 {
-  "name": "@santra/cli",
-  "private": true,
+  "name": "santra",
+  "version": "2.0.3",
+  "description": "Santra terminal coding assistant CLI",
+  "private": false,
   "type": "module",
-  "module": "index.ts",
+  "main": "dist/santra.mjs",
+  "bin": {
+    "santra": "bin/santra.js"
+  },
+  "files": [
+    "dist",
+    "bin",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
+    "build": "bun build index.ts --target node --format esm --outfile dist/santra.mjs --packages bundle",
+    "prepack": "bun run build",
+    "postinstall": "node postinstall.js",
     "typecheck": "bunx tsc --noEmit --project tsconfig.json",
     "tui": "bun src/tui/index.tsx",
     "tui:v3": "bun src/tui_v3/index.tsx",
-    "tui:v4": "bun src/tui_v4/index.tsx"
+    "tui:v4": "bun src/tui_v4/index.tsx",
+    "tui:v5": "bun src/tui_v5/index.tsx"
   },
-  "dependencies": {
+  "dependencies": {},
+  "devDependencies": {
     "@santra/core": "workspace:*",
     "@santra/shared": "workspace:*",
+    "@opentui/react": "^0.1.97",
     "ink": "^6.8.0",
     "ink-spinner": "^5.0.0",
-    "react": "^19.2.0",
-    "zod": "^4.3.6"
-  },
-  "devDependencies": {
-    "@opentui/react": "^0.1.97",
     "@types/bun": "latest",
-    "@types/react": "^19.2.14"
-  },
-  "peerDependencies": {
-    "typescript": "^6"
+    "@types/react": "^19.2.14",
+    "react": "^19.2.0",
+    "typescript": "^6",
+    "zod": "^4.3.6"
   }
 }

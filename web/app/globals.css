@@ -1,26 +1,247 @@
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
-
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+/* ── Tokens ─────────────────────────────────────────────────────────────────── */
+:root {
+  --bg:        #111111;
+  --bg-2:      #181818;
+  --bg-3:      #1f1f1f;
+  --border:    #262626;
+  --border-2:  #303030;
+
+  --text:      #e8e6e3;
+  --text-2:    #888580;
+  --text-3:    #555250;
+
+  --orange:    #F97316;
+  --orange-bg: rgba(249, 115, 22, 0.08);
+  --orange-border: rgba(249, 115, 22, 0.18);
+
+  --green:     #4ade80;
+  --red:       #f87171;
+
+  --mono: var(--font-geist-mono, 'JetBrains Mono', ui-monospace, monospace);
 }
 
+/* ── Reset / base ────────────────────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+html { scroll-behavior: smooth; }
+
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-geist-sans, system-ui, sans-serif);
+  font-size: 15px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ── Typography ──────────────────────────────────────────────────────────────── */
+h1, h2, h3 { letter-spacing: -0.025em; line-height: 1.15; }
+
+.display {
+  font-size: clamp(2.6rem, 6vw, 5rem);
+  font-weight: 700;
+  letter-spacing: -0.035em;
+  line-height: 1.06;
+}
+
+.title {
+  font-size: clamp(1.6rem, 3vw, 2.4rem);
+  font-weight: 700;
+  letter-spacing: -0.028em;
+  line-height: 1.18;
+}
+
+.overline {
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-2);
+  font-family: var(--mono);
+}
+
+/* ── Buttons ─────────────────────────────────────────────────────────────────── */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.82rem;
+  font-weight: 600;
+  border-radius: 4px;
+  padding: 0.5rem 1rem;
+  text-decoration: none;
+  transition: opacity 0.15s;
+  border: 1px solid transparent;
+  cursor: pointer;
+  white-space: nowrap;
+  font-family: var(--mono);
+  letter-spacing: 0.01em;
+}
+.btn:hover { opacity: 0.78; }
+
+.btn-fill {
+  background: var(--orange);
+  color: #0c0704;
+  border-color: var(--orange);
+}
+
+/* Secondary CTA — plain text link style, no box */
+.btn-outline {
+  background: transparent;
+  color: var(--text-2);
+  border-color: transparent;
+  padding-left: 0;
+  padding-right: 0;
+}
+.btn-outline:hover { color: var(--text); opacity: 1; }
+
+/* ── TUI mock ────────────────────────────────────────────────────────────────── */
+.tui {
+  background: #0f1117;
+  border: 1px solid #2a2a2a;
+  border-radius: 10px;
+  overflow: hidden;
+  font-family: var(--mono);
+  font-size: 0.8rem;
+  line-height: 1.55;
+}
+
+.tui-chrome {
+  background: #161820;
+  border-bottom: 1px solid #222430;
+  padding: 0.5rem 1rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.tui-body {
+  padding: 1.25rem 1.5rem;
+  min-height: 220px;
+}
+
+.tui-input {
+  border-top: 1px solid #222430;
+  padding: 0.5rem 1rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: #888;
+}
+
+.tui-status {
+  border-top: 1px solid #1e1e1e;
+  padding: 0.4rem 1rem;
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  font-size: 0.72rem;
+  color: #555;
+}
+
+/* ── Code inline ─────────────────────────────────────────────────────────────── */
+code {
+  font-family: var(--mono);
+  font-size: 0.85em;
+  background: var(--bg-3);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 0.1em 0.4em;
+  color: var(--text-2);
+}
+
+/* ── Code block ──────────────────────────────────────────────────────────────── */
+.code-block {
+  background: #0d0d0d;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 1rem 1.25rem;
+  font-family: var(--mono);
+  font-size: 0.8rem;
+  line-height: 1.65;
+  overflow-x: auto;
+}
+
+.c-green  { color: #4ade80; }
+.c-orange { color: var(--orange); }
+.c-gray   { color: #555; }
+.c-muted  { color: #888; }
+.c-blue   { color: #7dd3fc; }
+.c-text   { color: var(--text); }
+
+/* ── Layout helpers ──────────────────────────────────────────────────────────── */
+.container { max-width: 1080px; margin: 0 auto; padding: 0 1.5rem; }
+.container-sm { max-width: 720px; margin: 0 auto; padding: 0 1.5rem; }
+
+.divider { border: none; border-top: 1px solid var(--border); }
+
+/* ── Nav ─────────────────────────────────────────────────────────────────────── */
+.nav-wrap {
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  background: rgba(17, 17, 17, 0.9);
+  backdrop-filter: blur(12px);
+  border-bottom: 1px solid var(--border);
+}
+
+/* ── Scrollbar ───────────────────────────────────────────────────────────────── */
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border-2); border-radius: 3px; }
+
+/* ── Docs sidebar ────────────────────────────────────────────────────────────── */
+.docs-layout {
+  display: grid;
+  grid-template-columns: 220px 1fr;
+  gap: 0;
+  min-height: calc(100vh - 57px);
+}
+.docs-sidebar {
+  border-right: 1px solid var(--border);
+  padding: 2rem 0;
+  position: sticky;
+  top: 57px;
+  height: calc(100vh - 57px);
+  overflow-y: auto;
+}
+.docs-content {
+  padding: 2.5rem 3rem;
+  max-width: 740px;
+}
+.docs-content h2 {
+  font-size: 1.4rem;
+  font-weight: 700;
+  margin: 2.5rem 0 0.75rem;
+  padding-top: 2.5rem;
+  border-top: 1px solid var(--border);
+}
+.docs-content h2:first-child { margin-top: 0; padding-top: 0; border-top: none; }
+.docs-content h3 { font-size: 1rem; font-weight: 600; margin: 1.5rem 0 0.5rem; }
+.docs-content p { color: var(--text-2); margin-bottom: 1rem; line-height: 1.7; }
+.docs-content ul, .docs-content ol { color: var(--text-2); padding-left: 1.25rem; margin-bottom: 1rem; line-height: 1.8; }
+.docs-content li { margin-bottom: 0.15rem; }
+.docs-content .code-block { margin: 1rem 0; }
+.docs-content table { width: 100%; border-collapse: collapse; margin: 1rem 0; font-size: 0.85rem; }
+.docs-content th { text-align: left; padding: 0.5rem 0.75rem; border-bottom: 1px solid var(--border-2); color: var(--text-2); font-size: 0.72rem; letter-spacing: 0.06em; text-transform: uppercase; }
+.docs-content td { padding: 0.6rem 0.75rem; border-bottom: 1px solid var(--border); color: var(--text-2); vertical-align: top; }
+.docs-content tr:last-child td { border-bottom: none; }
+
+@media (max-width: 780px) {
+  .docs-layout { grid-template-columns: 1fr; }
+  .docs-sidebar { position: static; height: auto; border-right: none; border-bottom: 1px solid var(--border); padding: 1rem 1.5rem; }
+  .docs-content { padding: 1.5rem; }
+}
+
+/* ── Responsive ──────────────────────────────────────────────────────────────── */
+@media (max-width: 640px) {
+  .hide-mobile { display: none !important; }
+  .display { font-size: clamp(2rem, 8vw, 2.8rem); }
 }

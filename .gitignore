@@ -19,7 +19,7 @@ report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 # santra dev logs
 .santra-logs/
 
-codebuff.txt
+
 
 # dotenv environment variable files
 .env
@@ -41,4 +41,4 @@ codebuff.txt
 tmp
 .vscode
 src 3
-codebuff
+codebuff-main/

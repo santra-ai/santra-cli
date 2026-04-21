@@ -1,47 +1,59 @@
-import { Client } from "./src/client.ts";
-import type { RunState } from "@santra/shared";
+import { render } from "ink";
+import { createElement } from "react";
+import { App } from "./src/tui_v4/App";
+import { installShellProfile } from "./src/utils/shell-profile";
 
-// taking input and argv
+type Command = "install-shell" | "--install-shell" | "-i";
 
-const prompt = process.argv.slice(2).join(" ").trim();
-
-if (!prompt) {
-  console.error("Usage: bun cli/src/index.ts <your prompt here>");
-  process.exit(1);
-}
-
-// run function calling
-
-const client = new Client();
-
-console.log(`\nYou: ${prompt}`);
-process.stdout.write("Agent: ");
-
-let state: RunState;
-let streamed = "";
-
-try {
-  state = await client.run({
-    prompt,
-    onDelta: (chunk) => {
-      streamed += chunk;
-      process.stdout.write(chunk);
-    },
-  });
-} catch (err) {
-  console.error(
-    `\n[cli] Fatal: ${err instanceof Error ? err.message : String(err)}`,
+function isInstallCommand(value: string | undefined): value is Command {
+  return (
+    value === "install-shell" || value === "--install-shell" || value === "-i"
   );
-  process.exit(1);
 }
 
-if (state.output.type === "error") {
-  console.error(`[cli] Error: ${state.output.message}`);
-  process.exit(1);
+function printUsage(): void {
+  console.log("Usage: santra [install-shell|--install-shell|-i]");
 }
 
-if (state.output.type === "text" && state.output.content !== streamed) {
-  process.stdout.write(state.output.content);
+function runInstallShell(): void {
+  const dryRun =
+    process.argv.includes("--dry-run") || process.argv.includes("-n");
+  const results = installShellProfile(dryRun);
+  const shell = process.env["SHELL"] ?? "";
+  const shellRc = shell.includes("zsh") ? "~/.zshrc" : "~/.bashrc";
+
+  for (const result of results) {
+    const status = result.changed
+      ? dryRun
+        ? "would update"
+        : "updated"
+      : "already configured";
+    console.log(`${status}: ${result.filePath}`);
+  }
+
+  console.log(
+    dryRun
+      ? "Dry run complete. Restart your shell after applying the changes manually."
+      : `Shell profile updated. Run 'source ${shellRc}' (or restart your terminal), then run 'santra'.`,
+  );
+
+  if (!dryRun) {
+    console.log(
+      "If 'santra' is still not found, run: npx santra --install-shell",
+    );
+  }
 }
 
-process.stdout.write("\n");
+const [command] = process.argv.slice(2);
+
+if (command === "--help" || command === "-h") {
+  printUsage();
+  process.exit(0);
+}
+
+if (isInstallCommand(command)) {
+  runInstallShell();
+  process.exit(0);
+}
+
+render(createElement(App), { incrementalRendering: true, maxFps: 60 });

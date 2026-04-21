@@ -1,8 +1,13 @@
 import { TOOL_DEFINITIONS } from "./definitions";
+import type { ToolName } from "../types/types.ts";
 
 // Build a plain-text prompt that teaches the model which tools exist and how to call them.
-export function buildToolInstructionsPrompt(): string {
-  const toolsBlock = TOOL_DEFINITIONS.map((tool) => {
+export function buildToolInstructionsPrompt(toolNames?: ToolName[]): string {
+  const tools = toolNames?.length
+    ? TOOL_DEFINITIONS.filter((tool) => toolNames.includes(tool.name))
+    : TOOL_DEFINITIONS;
+
+  const toolsBlock = tools.map((tool) => {
     const params = Object.entries(tool.parameters)
       .map(
         ([key, value]) =>
@@ -33,15 +38,19 @@ The tool result will be returned to you as:
 </tool_result>
 
 After receiving a tool_result, decide what to do next — call another tool or write your final response.
+Before each major step, you may emit a short <status>...</status> line that says what you are about to do.
+When you change from one major step to another, emit a new <status> first.
 
 ## Concrete Examples
 
 ### Example: Read a file
+<status>Reading package metadata</status>
 <tool_call name="read_file">
 {"path": "package.json"}
 </tool_call>
 
 ### Example: List a directory
+<status>Inspecting the root folder</status>
 <tool_call name="list_directory">
 {"path": "."}
 </tool_call>
@@ -88,7 +97,12 @@ After receiving a tool_result, decide what to do next — call another tool or w
 4. The JSON inside the tool_call tag must be valid JSON. Escape newlines as \\n in strings.
 5. Never call a tool that is not listed above.
 6. If the user asks about the repo, paths, files, or current working directory, inspect with tools before answering.
-7. When all tool work is done, write your final answer as plain prose.
-8. NEVER write file contents in your text response — only write_file/str_replace saves to disk.
+7. Emit a short <status> before each major step and before the final answer.
+8. When all tool work is done, write your final answer as plain prose.
+9. NEVER write file contents in your text response — only write_file/str_replace saves to disk.
+10. NEVER emit empty {} for tools with required parameters like read_file, list_directory, write_file, str_replace, search_files, glob, search_text, code_search, read_subtree, read_docs, or run_terminal_command.
+11. If you do not know a path yet, call list_directory or search_files first and then use the discovered path in the next tool call.
+12. Before calling a tool, sanity-check that every required field is present in the JSON.
+
 `.trim();
 }
